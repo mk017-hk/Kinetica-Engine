@@ -23,13 +23,15 @@ find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio dnn h
 # Eigen (3.4+)
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 
-# LibTorch (C++ PyTorch) — only needed by the pose module (DepthLifter)
+# LibTorch (C++ PyTorch) — required for training (hm_train, hm_style),
+# optional for inference-only builds.
 find_package(Torch QUIET)
 if(Torch_FOUND)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
     set(HM_HAS_TORCH TRUE)
+    message(STATUS "LibTorch found — training modules enabled")
 else()
-    message(STATUS "LibTorch not found — DepthLifter will use geometric fallback only")
+    message(STATUS "LibTorch not found — training tools (hm_train, hm_style) will not have ML support")
     set(HM_HAS_TORCH FALSE)
 endif()
 
@@ -157,7 +159,8 @@ target_link_libraries(hypermotion PUBLIC
     nlohmann_json::nlohmann_json
 )
 
-# LibTorch is only needed by the pose module (DepthLifter learned network)
+# LibTorch — enables training modules (MotionTransformer, ConditionEncoder,
+# StyleEncoder, TemporalConvNet, StyleTrainer, ContrastiveLoss, etc.)
 if(HM_HAS_TORCH)
     target_link_libraries(hypermotion PUBLIC ${TORCH_LIBRARIES})
     target_compile_definitions(hypermotion PUBLIC HM_HAS_TORCH=1)

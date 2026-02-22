@@ -10,7 +10,7 @@ static constexpr const char* TAG = "MotionSegmenter";
 
 struct MotionSegmenter::Impl {
     MotionSegmenterConfig config;
-    TemporalConvNet tcn;
+    TemporalConvNetOnnx tcn;
     MotionFeatureExtractor featureExtractor;
     bool initialized = false;
 };

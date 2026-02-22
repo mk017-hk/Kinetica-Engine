@@ -1,13 +1,61 @@
 #pragma once
 
-// StyleTrainer is now implemented in the Python training pipeline.
-// This header is kept for backward compatibility but contains no class.
-// See: python/hypermotion/training/style_trainer.py
-//
-// Usage:
-//   python scripts/hm_style.py --train --data player_clips/ --epochs 200 --output styles/
-//   python scripts/hm_style.py --export --encoder styles/style_encoder_final.pt --output models/
+#include "HyperMotion/core/Types.h"
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace hm::style {
-// Training-only — use the Python pipeline.
+
+/// A clip from a single player, used for contrastive training.
+struct TrainingPair {
+    std::string playerID;
+    std::vector<SkeletonFrame> clip;
+};
+
+struct StyleTrainerConfig {
+    int numEpochs = 200;
+    int batchSize = 32;
+    float learningRate = 1e-4f;
+    std::string savePath = "style_encoder.pt";
+};
+
+#ifdef HM_HAS_TORCH
+
+/// Trains a StyleEncoder with NT-Xent contrastive loss.
+///
+/// Data is organized as per-player clips.  Each training batch samples
+/// pairs of clips from the same and different players.
+class StyleTrainer {
+public:
+    explicit StyleTrainer(const StyleTrainerConfig& config);
+    ~StyleTrainer();
+
+    StyleTrainer(const StyleTrainer&) = delete;
+    StyleTrainer& operator=(const StyleTrainer&) = delete;
+
+    using ProgressCallback = std::function<void(int epoch, float loss, float lr)>;
+
+    /// Run the full training loop.
+    void train(const std::vector<TrainingPair>& data,
+               ProgressCallback callback = nullptr);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+#else
+
+class StyleTrainer {
+public:
+    explicit StyleTrainer(const StyleTrainerConfig&) {}
+    using ProgressCallback = std::function<void(int epoch, float loss, float lr)>;
+    void train(const std::vector<TrainingPair>&, ProgressCallback = nullptr) {}
+};
+
+#endif
+
 } // namespace hm::style

@@ -15,7 +15,14 @@ struct MotionDiffusionModel::Impl {
     OnnxInference denoiser;
     NoiseScheduler scheduler;
     bool initialized = false;
+    bool trainingMode = false;
     std::mt19937 rng{std::random_device{}()};
+
+#ifdef HM_HAS_TORCH
+    MotionTransformer transformer_{nullptr};
+    ConditionEncoder condEncoder_{nullptr};
+    torch::Tensor alphasCumprodTensor_;
+#endif
 
     Impl(const MotionDiffusionConfig& cfg)
         : config(cfg)
@@ -30,8 +37,39 @@ MotionDiffusionModel::MotionDiffusionModel(MotionDiffusionModel&&) noexcept = de
 MotionDiffusionModel& MotionDiffusionModel::operator=(MotionDiffusionModel&&) noexcept = default;
 
 bool MotionDiffusionModel::initialize() {
+#ifdef HM_HAS_TORCH
+    // If no ONNX path, initialise in training mode with LibTorch modules
     if (impl_->config.onnxModelPath.empty()) {
-        HM_LOG_ERROR(TAG, "No ONNX model path specified");
+        impl_->transformer_ = MotionTransformer(
+            impl_->config.motionDim,
+            /*condDim=*/256,
+            /*modelDim=*/512,
+            /*numHeads=*/8,
+            /*numLayers=*/8,
+            /*ffnDim=*/2048,
+            /*dropout=*/0.1f);
+
+        impl_->condEncoder_ = ConditionEncoder(
+            impl_->config.condDim, 512, 256);
+
+        // Build alphas_cumprod tensor for training noise sampling
+        std::vector<float> alphas(impl_->config.numTimesteps);
+        for (int i = 0; i < impl_->config.numTimesteps; ++i) {
+            alphas[i] = impl_->scheduler.alphasCumprod(i);
+        }
+        impl_->alphasCumprodTensor_ = torch::from_blob(
+            alphas.data(), {impl_->config.numTimesteps}, torch::kFloat32).clone();
+
+        impl_->trainingMode = true;
+        impl_->initialized = true;
+        HM_LOG_INFO(TAG, "Diffusion model initialized (LibTorch training mode)");
+        return true;
+    }
+#endif
+
+    // ONNX inference mode
+    if (impl_->config.onnxModelPath.empty()) {
+        HM_LOG_ERROR(TAG, "No ONNX model path specified and LibTorch not available");
         return false;
     }
 
@@ -47,6 +85,10 @@ bool MotionDiffusionModel::initialize() {
 bool MotionDiffusionModel::isInitialized() const {
     return impl_->initialized;
 }
+
+// ===================================================================
+// ONNX Inference
+// ===================================================================
 
 std::vector<float> MotionDiffusionModel::generateRaw(const std::vector<float>& condition) {
     if (!impl_->initialized) {
@@ -137,5 +179,75 @@ std::vector<SkeletonFrame> MotionDiffusionModel::generate(const std::vector<floa
 
     return frames;
 }
+
+// ===================================================================
+// LibTorch Training
+// ===================================================================
+
+#ifdef HM_HAS_TORCH
+
+MotionTransformer MotionDiffusionModel::transformer() {
+    return impl_->transformer_;
+}
+
+ConditionEncoder MotionDiffusionModel::condEncoder() {
+    return impl_->condEncoder_;
+}
+
+torch::Tensor MotionDiffusionModel::trainStep(torch::Tensor x0, torch::Tensor cond) {
+    // x0:   [B, seqLen, motionDim]  clean motion
+    // cond:  [B, condDim]           raw condition vector
+
+    auto device = x0.device();
+    int batchSize = x0.size(0);
+
+    // Ensure alphas_cumprod is on the right device
+    if (impl_->alphasCumprodTensor_.device() != device) {
+        impl_->alphasCumprodTensor_ = impl_->alphasCumprodTensor_.to(device);
+    }
+
+    // Sample random timesteps [0, T)
+    auto t = torch::randint(0, impl_->config.numTimesteps, {batchSize},
+                             torch::TensorOptions().dtype(torch::kLong).device(device));
+
+    // Gather alphas_cumprod for selected timesteps
+    auto alphaBarT = impl_->alphasCumprodTensor_.index({t});  // [B]
+
+    // Sample Gaussian noise
+    auto noise = torch::randn_like(x0);
+
+    // Forward diffusion: x_t = sqrt(alpha_bar_t) * x0 + sqrt(1 - alpha_bar_t) * noise
+    auto sqrtAlphaBar = alphaBarT.sqrt().view({batchSize, 1, 1});
+    auto sqrtOneMinusAlphaBar = (1.0f - alphaBarT).sqrt().view({batchSize, 1, 1});
+    auto x_t = sqrtAlphaBar * x0 + sqrtOneMinusAlphaBar * noise;
+
+    // Encode condition
+    auto condEmb = impl_->condEncoder_->forward(cond);  // [B, 256]
+
+    // Predict noise
+    auto predictedNoise = impl_->transformer_->forward(x_t, t, condEmb);  // [B, S, motionDim]
+
+    // MSE loss between predicted and actual noise
+    return torch::mse_loss(predictedNoise, noise);
+}
+
+void MotionDiffusionModel::save(const std::string& path) {
+    torch::serialize::OutputArchive archive;
+
+    // Save transformer
+    torch::serialize::OutputArchive transformerArchive;
+    impl_->transformer_->save(transformerArchive);
+    archive.write("transformer", transformerArchive);
+
+    // Save condition encoder
+    torch::serialize::OutputArchive condArchive;
+    impl_->condEncoder_->save(condArchive);
+    archive.write("cond_encoder", condArchive);
+
+    archive.save_to(path);
+    HM_LOG_INFO(TAG, "Model saved to: " + path);
+}
+
+#endif  // HM_HAS_TORCH
 
 } // namespace hm::ml

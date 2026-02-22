@@ -8,25 +8,29 @@ namespace hm::style {
 
 static constexpr const char* TAG = "StyleEncoder";
 
-struct StyleEncoder::Impl {
+// ===================================================================
+// ONNX inference version (StyleEncoderOnnx)
+// ===================================================================
+
+struct StyleEncoderOnnx::Impl {
     hm::ml::OnnxInference onnx;
     bool loaded = false;
 };
 
-StyleEncoder::StyleEncoder() : impl_(std::make_unique<Impl>()) {}
-StyleEncoder::~StyleEncoder() = default;
-StyleEncoder::StyleEncoder(StyleEncoder&&) noexcept = default;
-StyleEncoder& StyleEncoder::operator=(StyleEncoder&&) noexcept = default;
+StyleEncoderOnnx::StyleEncoderOnnx() : impl_(std::make_unique<Impl>()) {}
+StyleEncoderOnnx::~StyleEncoderOnnx() = default;
+StyleEncoderOnnx::StyleEncoderOnnx(StyleEncoderOnnx&&) noexcept = default;
+StyleEncoderOnnx& StyleEncoderOnnx::operator=(StyleEncoderOnnx&&) noexcept = default;
 
-bool StyleEncoder::load(const std::string& onnxPath, bool useGPU) {
+bool StyleEncoderOnnx::load(const std::string& onnxPath, bool useGPU) {
     impl_->loaded = impl_->onnx.load(onnxPath, useGPU);
     return impl_->loaded;
 }
 
-bool StyleEncoder::isLoaded() const { return impl_->loaded; }
+bool StyleEncoderOnnx::isLoaded() const { return impl_->loaded; }
 
 std::vector<std::array<float, STYLE_INPUT_DIM>>
-StyleEncoder::prepareInput(const std::vector<SkeletonFrame>& frames) {
+StyleEncoderOnnx::prepareInput(const std::vector<SkeletonFrame>& frames) {
     int numFrames = static_cast<int>(frames.size());
     std::vector<std::array<float, STYLE_INPUT_DIM>> result(numFrames);
 
@@ -62,7 +66,7 @@ StyleEncoder::prepareInput(const std::vector<SkeletonFrame>& frames) {
     return result;
 }
 
-std::array<float, STYLE_DIM> StyleEncoder::encode(const std::vector<SkeletonFrame>& frames) {
+std::array<float, STYLE_DIM> StyleEncoderOnnx::encode(const std::vector<SkeletonFrame>& frames) {
     std::array<float, STYLE_DIM> embedding{};
     embedding.fill(0.0f);
 
@@ -96,7 +100,7 @@ std::array<float, STYLE_DIM> StyleEncoder::encode(const std::vector<SkeletonFram
     const float* embData = outputs[0].GetTensorData<float>();
     std::copy_n(embData, STYLE_DIM, embedding.begin());
 
-    // L2 normalize (should already be normalized by the model, but be safe)
+    // L2 normalize
     float norm = 0.0f;
     for (float v : embedding) norm += v * v;
     norm = std::sqrt(norm);
@@ -106,5 +110,118 @@ std::array<float, STYLE_DIM> StyleEncoder::encode(const std::vector<SkeletonFram
 
     return embedding;
 }
+
+// ===================================================================
+// LibTorch training version
+// ===================================================================
+
+#ifdef HM_HAS_TORCH
+
+// -----------------------------------------------------------------------
+// ResBlock1D
+// -----------------------------------------------------------------------
+
+ResBlock1DImpl::ResBlock1DImpl(int inChannels, int outChannels) {
+    conv1_ = register_module("conv1", torch::nn::Conv1d(
+        torch::nn::Conv1dOptions(inChannels, outChannels, 3).padding(1)));
+    bn1_ = register_module("bn1", torch::nn::BatchNorm1d(outChannels));
+    conv2_ = register_module("conv2", torch::nn::Conv1d(
+        torch::nn::Conv1dOptions(outChannels, outChannels, 3).padding(1)));
+    bn2_ = register_module("bn2", torch::nn::BatchNorm1d(outChannels));
+
+    needsDownsample_ = (inChannels != outChannels);
+    if (needsDownsample_) {
+        downsample_ = register_module("downsample", torch::nn::Conv1d(
+            torch::nn::Conv1dOptions(inChannels, outChannels, 1)));
+    }
+}
+
+torch::Tensor ResBlock1DImpl::forward(torch::Tensor x) {
+    auto residual = needsDownsample_ ? downsample_->forward(x) : x;
+
+    auto h = torch::relu(bn1_->forward(conv1_->forward(x)));
+    h = bn2_->forward(conv2_->forward(h));
+    return torch::relu(h + residual);
+}
+
+// -----------------------------------------------------------------------
+// StyleEncoder (training)
+// -----------------------------------------------------------------------
+
+StyleEncoderImpl::StyleEncoderImpl(int inputDim, int styleDim) {
+    inputConv_ = register_module("input_conv", torch::nn::Conv1d(
+        torch::nn::Conv1dOptions(inputDim, 128, 3).padding(1)));
+    inputBN_ = register_module("input_bn", torch::nn::BatchNorm1d(128));
+
+    // 4 ResBlocks: 128->128, 128->256, 256->256, 256->512
+    resBlocks_ = register_module("res_blocks", torch::nn::ModuleList());
+    resBlocks_->push_back(ResBlock1D(128, 128));
+    resBlocks_->push_back(ResBlock1D(128, 256));
+    resBlocks_->push_back(ResBlock1D(256, 256));
+    resBlocks_->push_back(ResBlock1D(256, 512));
+
+    fc1_ = register_module("fc1", torch::nn::Linear(512, 256));
+    fc2_ = register_module("fc2", torch::nn::Linear(256, styleDim));
+}
+
+torch::Tensor StyleEncoderImpl::forward(torch::Tensor x) {
+    // x: [B, inputDim, T]
+    auto h = torch::relu(inputBN_->forward(inputConv_->forward(x)));
+
+    for (const auto& block : *resBlocks_) {
+        h = block->as<ResBlock1DImpl>()->forward(h);
+    }
+
+    // Global Average Pooling: [B, 512, T] -> [B, 512]
+    h = h.mean(/*dim=*/2);
+
+    h = torch::relu(fc1_->forward(h));
+    h = fc2_->forward(h);
+
+    // L2 normalize
+    h = torch::nn::functional::normalize(h,
+        torch::nn::functional::NormalizeFuncOptions().p(2).dim(1));
+
+    return h;  // [B, styleDim]
+}
+
+torch::Tensor StyleEncoderImpl::prepareInput(const std::vector<SkeletonFrame>& frames) {
+    int numFrames = static_cast<int>(frames.size());
+    auto tensor = torch::zeros({1, STYLE_INPUT_DIM, numFrames});
+    auto acc = tensor.accessor<float, 3>();
+
+    for (int f = 0; f < numFrames; ++f) {
+        int idx = 0;
+
+        // 132D rotations (22 joints x 6D)
+        for (int j = 0; j < JOINT_COUNT; ++j) {
+            for (int d = 0; d < ROTATION_DIM; ++d) {
+                acc[0][idx++][f] = frames[f].joints[j].rotation6D[d];
+            }
+        }
+
+        // 3D root velocity (normalized)
+        acc[0][idx++][f] = frames[f].rootVelocity.x / 800.0f;
+        acc[0][idx++][f] = frames[f].rootVelocity.y / 800.0f;
+        acc[0][idx++][f] = frames[f].rootVelocity.z / 800.0f;
+
+        // 66D angular velocities (finite differences)
+        if (f > 0) {
+            for (int j = 0; j < JOINT_COUNT; ++j) {
+                Vec3 prev = frames[f - 1].joints[j].localEulerDeg;
+                Vec3 curr = frames[f].joints[j].localEulerDeg;
+                acc[0][idx++][f] = (curr.x - prev.x) / 360.0f;
+                acc[0][idx++][f] = (curr.y - prev.y) / 360.0f;
+                acc[0][idx++][f] = (curr.z - prev.z) / 360.0f;
+            }
+        } else {
+            for (int k = 0; k < 66; ++k) acc[0][idx++][f] = 0.0f;
+        }
+    }
+
+    return tensor;  // [1, STYLE_INPUT_DIM, T]
+}
+
+#endif  // HM_HAS_TORCH
 
 } // namespace hm::style

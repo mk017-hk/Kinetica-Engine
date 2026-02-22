@@ -1,18 +1,4 @@
+// ConditionEncoder is now baked into the ONNX denoiser model.
+// Training is handled by: python/hypermotion/models/condition_encoder.py
+// This file is intentionally empty — kept so CMake source lists don't break.
 #include "HyperMotion/ml/ConditionEncoder.h"
-
-namespace hm::ml {
-
-ConditionEncoderImpl::ConditionEncoderImpl() {
-    fc1 = register_module("fc1", torch::nn::Linear(MotionCondition::DIM, 512));
-    fc2 = register_module("fc2", torch::nn::Linear(512, 512));
-    fc3 = register_module("fc3", torch::nn::Linear(512, 256));
-}
-
-torch::Tensor ConditionEncoderImpl::forward(torch::Tensor x) {
-    x = torch::relu(fc1(x));
-    x = torch::relu(fc2(x));
-    x = torch::relu(fc3(x));
-    return x;  // [batch, 256]
-}
-
-} // namespace hm::ml

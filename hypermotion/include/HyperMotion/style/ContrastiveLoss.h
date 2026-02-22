@@ -1,30 +1,10 @@
 #pragma once
 
-#include <torch/torch.h>
+// ContrastiveLoss is now implemented in the Python training pipeline.
+// This header is kept for backward compatibility but contains no class.
+// See: python/hypermotion/models/contrastive_loss.py
 
 namespace hm::style {
-
-// NT-Xent (Normalized Temperature-scaled Cross-Entropy) Loss
-// Used for contrastive learning of style embeddings
-class ContrastiveLoss {
-public:
-    explicit ContrastiveLoss(float temperature = 0.07f);
-    ~ContrastiveLoss();
-
-    // Compute NT-Xent loss
-    // embeddings: [2*N, dim] where pairs (2i, 2i+1) are positive pairs
-    // Returns scalar loss
-    torch::Tensor compute(const torch::Tensor& embeddings);
-
-    // Alternative: explicit positive/negative
-    // anchor: [N, dim], positive: [N, dim]
-    torch::Tensor computePairwise(const torch::Tensor& anchor,
-                                   const torch::Tensor& positive);
-
-    float temperature() const { return temperature_; }
-
-private:
-    float temperature_;
-};
-
+// Training-only — use the Python pipeline:
+//   python scripts/hm_style.py --train --data player_clips/ --epochs 200
 } // namespace hm::style

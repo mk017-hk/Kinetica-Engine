@@ -58,7 +58,6 @@ struct MotionGenerator::Impl {
                 euler.y = std::clamp(euler.y, limits.minY, limits.maxY);
                 euler.z = std::clamp(euler.z, limits.minZ, limits.maxZ);
 
-                // Recompute quaternion and 6D from clamped euler
                 frame.joints[j].localRotation = MathUtils::eulerDegToQuat(euler);
                 frame.joints[j].rotation6D = MathUtils::quatToRot6D(frame.joints[j].localRotation);
             }
@@ -74,17 +73,14 @@ struct MotionGenerator::Impl {
         for (size_t f = 1; f < frames.size(); ++f) {
             auto& curr = frames[f];
             const auto& prev = frames[f - 1];
-
             float dt = 1.0f / 30.0f;
 
-            // Check left foot velocity
             Vec3 leftVel = (curr.joints[leftFootIdx].worldPosition -
                            prev.joints[leftFootIdx].worldPosition) / dt;
             if (leftVel.length() < 2.0f && curr.joints[leftFootIdx].worldPosition.y < 5.0f) {
                 curr.joints[leftFootIdx].worldPosition.y = 0.0f;
             }
 
-            // Check right foot velocity
             Vec3 rightVel = (curr.joints[rightFootIdx].worldPosition -
                             prev.joints[rightFootIdx].worldPosition) / dt;
             if (rightVel.length() < 2.0f && curr.joints[rightFootIdx].worldPosition.y < 5.0f) {
@@ -94,25 +90,19 @@ struct MotionGenerator::Impl {
     }
 
     float computeQuality(const std::vector<SkeletonFrame>& frames) {
-        if (frames.size() < 2) return 0.0f;
+        if (frames.size() < 3) return 0.0f;
 
-        float smoothnessScore = 1.0f;
-        float limbLengthConsistency = 1.0f;
-
-        // Check jerkiness: large frame-to-frame changes indicate low quality
         float totalJerk = 0.0f;
         for (size_t f = 2; f < frames.size(); ++f) {
             for (int j = 0; j < JOINT_COUNT; ++j) {
-                Vec3 acc1 = frames[f].joints[j].worldPosition -
-                            frames[f - 1].joints[j].worldPosition * 2.0f +
-                            frames[f - 2].joints[j].worldPosition;
-                totalJerk += acc1.length();
+                Vec3 acc = frames[f].joints[j].worldPosition -
+                           frames[f - 1].joints[j].worldPosition * 2.0f +
+                           frames[f - 2].joints[j].worldPosition;
+                totalJerk += acc.length();
             }
         }
         float avgJerk = totalJerk / ((frames.size() - 2) * JOINT_COUNT);
-        smoothnessScore = std::exp(-avgJerk * 0.01f);
-
-        return std::clamp(smoothnessScore * limbLengthConsistency, 0.0f, 1.0f);
+        return std::clamp(std::exp(-avgJerk * 0.01f), 0.0f, 1.0f);
     }
 };
 
@@ -127,10 +117,6 @@ bool MotionGenerator::initialize() {
     if (!impl_->diffusionModel.initialize()) {
         HM_LOG_ERROR(TAG, "Failed to initialize diffusion model");
         return false;
-    }
-
-    if (!impl_->config.transformerModelPath.empty()) {
-        impl_->diffusionModel.load(impl_->config.transformerModelPath);
     }
 
     impl_->initialized = true;
@@ -152,45 +138,32 @@ GeneratedMotion MotionGenerator::generate(const MotionCondition& condition) {
         return result;
     }
 
-    // Flatten condition to tensor
+    // Flatten condition to float vector
     auto condArray = condition.flatten();
-    auto condTensor = torch::from_blob(condArray.data(),
-                                        {1, MotionCondition::DIM},
-                                        torch::kFloat32).clone();
+    std::vector<float> condVec(condArray.begin(), condArray.end());
 
-    // Generate motion
-    auto motionTensor = impl_->diffusionModel.generate(condTensor);
+    // Generate frames via ONNX diffusion
+    result.frames = impl_->diffusionModel.generate(condVec);
 
-    // Convert tensor to SkeletonFrames
-    int seqLen = motionTensor.size(1);
-    auto accessor = motionTensor.accessor<float, 3>();
+    if (result.frames.empty()) {
+        HM_LOG_ERROR(TAG, "Generation produced empty output");
+        return result;
+    }
 
-    result.frames.resize(seqLen);
-    for (int f = 0; f < seqLen; ++f) {
-        std::vector<float> frameVec(FRAME_DIM);
-        for (int d = 0; d < FRAME_DIM; ++d) {
-            frameVec[d] = accessor[0][f][d];
-        }
-        result.frames[f] = MathUtils::vectorToSkeleton(frameVec);
-        result.frames[f].frameIndex = f;
-        result.frames[f].timestamp = f / 30.0;
-
-        // Set root position from condition velocity
-        if (f > 0) {
-            float dt = 1.0f / 30.0f;
-            result.frames[f].rootPosition = result.frames[f - 1].rootPosition +
-                                             condition.velocity * dt;
-        }
+    // Set root positions from condition velocity
+    for (size_t f = 1; f < result.frames.size(); ++f) {
+        float dt = 1.0f / 30.0f;
+        result.frames[f].rootPosition = result.frames[f - 1].rootPosition +
+                                         condition.velocity * dt;
         result.frames[f].rootVelocity = condition.velocity;
+    }
+    if (!result.frames.empty()) {
+        result.frames[0].rootVelocity = condition.velocity;
     }
 
     // Post-processing
     if (impl_->config.enableJointLimits) {
         impl_->applyJointLimits(result.frames);
-    }
-
-    if (impl_->config.enableFootContactCleanup) {
-        impl_->applyFootContactCleanup(result.frames);
     }
 
     // Compute forward kinematics for world positions
@@ -206,7 +179,10 @@ GeneratedMotion MotionGenerator::generate(const MotionCondition& condition) {
         }
     }
 
-    // Quality check
+    if (impl_->config.enableFootContactCleanup) {
+        impl_->applyFootContactCleanup(result.frames);
+    }
+
     if (impl_->config.enablePlausibilityCheck) {
         result.quality = impl_->computeQuality(result.frames);
     }
@@ -215,7 +191,7 @@ GeneratedMotion MotionGenerator::generate(const MotionCondition& condition) {
     result.inferenceTimeMs = std::chrono::duration<float, std::milli>(
         endTime - startTime).count();
 
-    HM_LOG_DEBUG(TAG, "Generated " + std::to_string(seqLen) + " frames in " +
+    HM_LOG_DEBUG(TAG, "Generated " + std::to_string(result.frames.size()) + " frames in " +
                  std::to_string(result.inferenceTimeMs) + "ms (quality=" +
                  std::to_string(result.quality) + ")");
 

@@ -1,28 +1,33 @@
 #pragma once
 
 #include "HyperMotion/core/Types.h"
-#include "HyperMotion/ml/ConditionEncoder.h"
-#include "HyperMotion/ml/NoiseScheduler.h"
-#include "HyperMotion/ml/MotionTransformer.h"
-#include <torch/torch.h>
+#include "HyperMotion/ml/OnnxInference.h"
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace hm::ml {
 
 struct MotionDiffusionConfig {
-    int motionDim = FRAME_DIM;      // 132
+    int motionDim = FRAME_DIM;          // 132
     int condDim = MotionCondition::DIM; // 78
-    int seqLen = 64;                // Generated motion length
+    int seqLen = 64;                    // Generated motion length
     int numTimesteps = 1000;
-    int numInferenceSteps = 50;     // DDIM steps
+    int numInferenceSteps = 50;         // DDIM steps
     float betaStart = 0.0001f;
     float betaEnd = 0.02f;
-    float learningRate = 1e-4f;
-    int batchSize = 64;
-    std::string modelSavePath;
+
+    /// Path to the ONNX denoiser (exported from Python).
+    /// The DDIM schedule is pure math and runs in C++.
+    std::string onnxModelPath;
+    bool useGPU = true;
 };
 
+/// Inference-only diffusion model.
+///
+/// The neural network (MotionTransformer + ConditionEncoder) is loaded from
+/// an ONNX file produced by the Python training pipeline.  The DDIM sampling
+/// loop and noise schedule are reimplemented in C++ (pure math, no weights).
 class MotionDiffusionModel {
 public:
     explicit MotionDiffusionModel(const MotionDiffusionConfig& config = {});
@@ -33,26 +38,17 @@ public:
     MotionDiffusionModel(MotionDiffusionModel&&) noexcept;
     MotionDiffusionModel& operator=(MotionDiffusionModel&&) noexcept;
 
+    /// Load the ONNX denoiser and precompute the noise schedule.
     bool initialize();
     bool isInitialized() const;
 
-    // Training: single step
-    // x0: [batch, seqLen, 132], condition: [batch, 78]
-    // Returns MSE loss
-    torch::Tensor trainStep(const torch::Tensor& x0, const torch::Tensor& condition);
+    /// Generate motion via DDIM sampling.
+    /// @param condition  Flat vector of MotionCondition::DIM floats.
+    /// @return 64 frames of generated motion as SkeletonFrame vector.
+    std::vector<SkeletonFrame> generate(const std::vector<float>& condition);
 
-    // Inference: generate motion from noise + condition
-    // condition: [batch, 78]
-    // Returns: [batch, seqLen, 132]
-    torch::Tensor generate(const torch::Tensor& condition);
-
-    // Save/load model
-    void save(const std::string& path);
-    void load(const std::string& path);
-
-    // Access components
-    MotionTransformer& transformer();
-    ConditionEncoder& condEncoder();
+    /// Raw generation returning flat float buffer [seqLen * FRAME_DIM].
+    std::vector<float> generateRaw(const std::vector<float>& condition);
 
 private:
     struct Impl;

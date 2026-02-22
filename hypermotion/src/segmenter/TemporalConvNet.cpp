@@ -1,95 +1,67 @@
 #include "HyperMotion/segmenter/TemporalConvNet.h"
+#include "HyperMotion/core/Logger.h"
 
 namespace hm::segmenter {
 
-// -------------------------------------------------------------------
-// TCN Block
-// -------------------------------------------------------------------
+static constexpr const char* TAG = "TemporalConvNet";
 
-TCNBlockImpl::TCNBlockImpl(int inChannels, int outChannels, int kernelSize,
-                             int dilation, float dropoutRate) {
-    int padding = (kernelSize - 1) * dilation;
+struct TemporalConvNet::Impl {
+    hm::ml::OnnxInference onnx;
+    bool loaded = false;
+};
 
-    conv1 = register_module("conv1",
-        torch::nn::Conv1d(torch::nn::Conv1dOptions(inChannels, outChannels, kernelSize)
-            .dilation(dilation).padding(padding)));
-    bn1 = register_module("bn1", torch::nn::BatchNorm1d(outChannels));
+TemporalConvNet::TemporalConvNet() : impl_(std::make_unique<Impl>()) {}
+TemporalConvNet::~TemporalConvNet() = default;
+TemporalConvNet::TemporalConvNet(TemporalConvNet&&) noexcept = default;
+TemporalConvNet& TemporalConvNet::operator=(TemporalConvNet&&) noexcept = default;
 
-    conv2 = register_module("conv2",
-        torch::nn::Conv1d(torch::nn::Conv1dOptions(outChannels, outChannels, kernelSize)
-            .dilation(dilation).padding(padding)));
-    bn2 = register_module("bn2", torch::nn::BatchNorm1d(outChannels));
-
-    dropout = register_module("dropout", torch::nn::Dropout(dropoutRate));
-
-    if (inChannels != outChannels) {
-        residual_conv = register_module("residual_conv",
-            torch::nn::Conv1d(torch::nn::Conv1dOptions(inChannels, outChannels, 1)));
-    }
+bool TemporalConvNet::load(const std::string& onnxPath, bool useGPU) {
+    impl_->loaded = impl_->onnx.load(onnxPath, useGPU);
+    return impl_->loaded;
 }
 
-torch::Tensor TCNBlockImpl::forward(torch::Tensor x) {
-    auto residual = x;
+bool TemporalConvNet::isLoaded() const { return impl_->loaded; }
 
-    // Conv1 -> BN -> ReLU -> Dropout
-    auto out = conv1(x);
-    // Causal: trim future (right side) to maintain causal behavior
-    if (out.size(2) > x.size(2)) {
-        out = out.slice(2, 0, x.size(2));
-    }
-    out = torch::relu(bn1(out));
-    out = dropout(out);
+std::vector<std::array<float, MOTION_TYPE_COUNT>> TemporalConvNet::classify(
+    const std::vector<std::array<float, 70>>& features) {
 
-    // Conv2 -> BN -> ReLU
-    out = conv2(out);
-    if (out.size(2) > x.size(2)) {
-        out = out.slice(2, 0, x.size(2));
-    }
-    out = bn2(out);
+    int numFrames = static_cast<int>(features.size());
+    std::vector<std::array<float, MOTION_TYPE_COUNT>> result(numFrames);
 
-    // Residual connection
-    if (residual_conv.is_empty()) {
-        out = torch::relu(out + residual);
-    } else {
-        out = torch::relu(out + residual_conv(residual));
+    if (!impl_->loaded || numFrames == 0) {
+        for (auto& r : result) {
+            r.fill(0.0f);
+            r[static_cast<int>(MotionType::Unknown)] = 1.0f;
+        }
+        return result;
     }
 
-    return out;
-}
-
-// -------------------------------------------------------------------
-// Temporal Convolutional Network
-// -------------------------------------------------------------------
-
-TemporalConvNetImpl::TemporalConvNetImpl(int inputDim, int hiddenDim,
-                                           int numClasses, int kernelSize,
-                                           float dropout) {
-    // Input projection
-    input_proj = register_module("input_proj",
-        torch::nn::Conv1d(torch::nn::Conv1dOptions(inputDim, hiddenDim, 1)));
-
-    // 6 dilated causal conv blocks: dilation = [1, 2, 4, 8, 16, 32]
-    std::vector<int> dilations = {1, 2, 4, 8, 16, 32};
-    for (size_t i = 0; i < dilations.size(); ++i) {
-        auto block = TCNBlock(hiddenDim, hiddenDim, kernelSize, dilations[i], dropout);
-        blocks.push_back(register_module("block_" + std::to_string(i), block));
+    // Flatten to [1, numFrames, 70]
+    std::vector<float> inputData(numFrames * 70);
+    for (int f = 0; f < numFrames; ++f) {
+        std::copy(features[f].begin(), features[f].end(),
+                  inputData.begin() + f * 70);
     }
 
-    // Output projection: per-frame classification
-    output_proj = register_module("output_proj",
-        torch::nn::Conv1d(torch::nn::Conv1dOptions(hiddenDim, numClasses, 1)));
-}
+    std::vector<int64_t> inputShape = {1, static_cast<int64_t>(numFrames), 70};
+    auto& memInfo = impl_->onnx.memoryInfo();
 
-torch::Tensor TemporalConvNetImpl::forward(torch::Tensor x) {
-    // x: [batch, features, time]
-    x = input_proj(x);
+    std::vector<Ort::Value> inputs;
+    inputs.push_back(Ort::Value::CreateTensor<float>(
+        memInfo, inputData.data(), inputData.size(),
+        inputShape.data(), inputShape.size()));
 
-    for (auto& block : blocks) {
-        x = block(x);
+    auto outputs = impl_->onnx.run(inputs);
+
+    // Output: [1, numFrames, MOTION_TYPE_COUNT]
+    const float* logits = outputs[0].GetTensorData<float>();
+
+    for (int f = 0; f < numFrames; ++f) {
+        const float* frameLogits = logits + f * MOTION_TYPE_COUNT;
+        std::copy_n(frameLogits, MOTION_TYPE_COUNT, result[f].begin());
     }
 
-    x = output_proj(x);
-    return x; // [batch, numClasses, time]
+    return result;
 }
 
 } // namespace hm::segmenter

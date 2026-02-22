@@ -1,43 +1,41 @@
 #pragma once
 
 #include "HyperMotion/core/Types.h"
-#include <torch/torch.h>
+#include "HyperMotion/ml/OnnxInference.h"
+#include <array>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace hm::style {
 
-// Style Encoder: Variable-length motion -> 64D style embedding
-// Input: [batch, time, 201] (132 rotations + 3 root vel + 66 angular vel)
-// Conv1D(201,128) -> 4 ResBlocks (128->128->256->256->512) -> GAP -> Linear(512,256)
-//   -> ReLU -> Linear(256,64) -> L2 norm
-// ~1.9M parameters
-
 static constexpr int STYLE_INPUT_DIM = 201;  // 132 + 3 + 66
 
-struct StyleResBlockImpl : torch::nn::Module {
-    torch::nn::Conv1d conv1{nullptr}, conv2{nullptr};
-    torch::nn::BatchNorm1d bn1{nullptr}, bn2{nullptr};
-    torch::nn::Conv1d downsample{nullptr};
+/// ONNX-based style encoder: variable-length motion -> 64D embedding.
+/// The model is trained in Python and exported to ONNX.
+class StyleEncoder {
+public:
+    StyleEncoder();
+    ~StyleEncoder();
 
-    StyleResBlockImpl(int inChannels, int outChannels);
-    torch::Tensor forward(torch::Tensor x);
+    StyleEncoder(const StyleEncoder&) = delete;
+    StyleEncoder& operator=(const StyleEncoder&) = delete;
+    StyleEncoder(StyleEncoder&&) noexcept;
+    StyleEncoder& operator=(StyleEncoder&&) noexcept;
+
+    bool load(const std::string& onnxPath, bool useGPU = true);
+    bool isLoaded() const;
+
+    /// Encode a motion clip to a 64D style embedding (L2 normalized).
+    std::array<float, STYLE_DIM> encode(const std::vector<SkeletonFrame>& frames);
+
+    /// Prepare the 201D-per-frame feature matrix from skeleton frames.
+    static std::vector<std::array<float, STYLE_INPUT_DIM>>
+    prepareInput(const std::vector<SkeletonFrame>& frames);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
-TORCH_MODULE(StyleResBlock);
-
-struct StyleEncoderImpl : torch::nn::Module {
-    torch::nn::Conv1d input_conv{nullptr};
-    torch::nn::BatchNorm1d input_bn{nullptr};
-    StyleResBlock res1{nullptr}, res2{nullptr}, res3{nullptr}, res4{nullptr};
-    torch::nn::Linear fc1{nullptr}, fc2{nullptr};
-
-    StyleEncoderImpl();
-
-    // Input: [batch, time, 201]
-    // Output: [batch, 64] (L2 normalized)
-    torch::Tensor forward(torch::Tensor x);
-
-    // Prepare input from skeleton frames
-    static torch::Tensor prepareInput(const std::vector<SkeletonFrame>& frames);
-};
-TORCH_MODULE(StyleEncoder);
 
 } // namespace hm::style

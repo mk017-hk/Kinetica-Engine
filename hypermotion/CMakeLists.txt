@@ -23,9 +23,15 @@ find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio dnn h
 # Eigen (3.4+)
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 
-# LibTorch (C++ PyTorch)
-find_package(Torch REQUIRED)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+# LibTorch (C++ PyTorch) — only needed by the pose module (DepthLifter)
+find_package(Torch QUIET)
+if(Torch_FOUND)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+    set(HM_HAS_TORCH TRUE)
+else()
+    message(STATUS "LibTorch not found — DepthLifter will use geometric fallback only")
+    set(HM_HAS_TORCH FALSE)
+endif()
 
 # ONNX Runtime
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
@@ -102,8 +108,9 @@ set(HM_SEGMENTER_SOURCES
 )
 
 set(HM_ML_SOURCES
-    src/ml/ConditionEncoder.cpp
+    src/ml/OnnxInference.cpp
     src/ml/NoiseScheduler.cpp
+    src/ml/ConditionEncoder.cpp
     src/ml/MotionTransformer.cpp
     src/ml/MotionDiffusionModel.cpp
     src/ml/MotionGenerator.cpp
@@ -146,10 +153,15 @@ target_include_directories(hypermotion PUBLIC
 target_link_libraries(hypermotion PUBLIC
     ${OpenCV_LIBS}
     Eigen3::Eigen
-    ${TORCH_LIBRARIES}
     ${ONNXRUNTIME_LIB}
     nlohmann_json::nlohmann_json
 )
+
+# LibTorch is only needed by the pose module (DepthLifter learned network)
+if(HM_HAS_TORCH)
+    target_link_libraries(hypermotion PUBLIC ${TORCH_LIBRARIES})
+    target_compile_definitions(hypermotion PUBLIC HM_HAS_TORCH=1)
+endif()
 
 if(HM_USE_CUDA)
     target_link_libraries(hypermotion PUBLIC CUDA::cudart)

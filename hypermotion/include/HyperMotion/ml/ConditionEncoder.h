@@ -1,17 +1,10 @@
 #pragma once
 
-#include "HyperMotion/core/Types.h"
-#include <torch/torch.h>
+// ConditionEncoder is now baked into the ONNX denoiser model.
+// Trained in Python: python/hypermotion/models/condition_encoder.py
+// This header is kept for reference only.
 
 namespace hm::ml {
-
-// Condition Encoder: Linear(78, 512) -> ReLU -> Linear(512, 512) -> ReLU -> Linear(512, 256)
-struct ConditionEncoderImpl : torch::nn::Module {
-    torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr};
-
-    ConditionEncoderImpl();
-    torch::Tensor forward(torch::Tensor x);  // [batch, 78] -> [batch, 256]
-};
-TORCH_MODULE(ConditionEncoder);
-
+// The condition encoder (78D -> 256D) is fused into the diffusion denoiser
+// ONNX graph and runs automatically during MotionDiffusionModel::generate().
 } // namespace hm::ml

@@ -1,7 +1,8 @@
 @echo off
 REM ================================================================
 REM  HyperMotion Studio — Windows Build Script
-REM  Produces: build/Release/HyperMotion Studio.exe
+REM  Run from anywhere; the script locates the hypermotion/ root.
+REM  Produces: hypermotion/build/Release/HyperMotion Studio.exe
 REM ================================================================
 
 setlocal enabledelayedexpansion
@@ -11,6 +12,13 @@ echo  ========================================
 echo   HyperMotion Studio — Build
 echo  ========================================
 echo.
+
+REM --- Locate the hypermotion project root (one level up from gui/) ---
+set "SCRIPT_DIR=%~dp0"
+set "PROJECT_ROOT=%SCRIPT_DIR%..\"
+pushd "%PROJECT_ROOT%"
+set "PROJECT_ROOT=%CD%"
+popd
 
 REM --- Check for CMake ---
 where cmake >nul 2>&1
@@ -31,16 +39,18 @@ if exist "%ProgramFiles%\Microsoft Visual Studio\2022" (
 )
 
 REM --- Configuration ---
-set BUILD_DIR=build
+set BUILD_DIR=%PROJECT_ROOT%\build
 set BUILD_TYPE=Release
 
-REM You can override these paths by setting environment variables:
+REM You can override dependency paths by setting environment variables:
 REM   set TORCH_DIR=C:\path\to\libtorch\share\cmake\Torch
 REM   set ONNXRUNTIME_ROOT=C:\path\to\onnxruntime
 REM   set IMGUI_DIR=C:\path\to\imgui
 REM   set OpenCV_DIR=C:\path\to\opencv\build
 
 echo [1/3] Configuring CMake...
+echo   Source:  %PROJECT_ROOT%
+echo   Build:   %BUILD_DIR%
 echo.
 
 set CMAKE_ARGS=-DHM_BUILD_GUI=ON -DHM_BUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
@@ -59,9 +69,9 @@ if defined OpenCV_DIR (
 )
 
 if defined GENERATOR (
-    cmake -G "%GENERATOR%" -A x64 -B %BUILD_DIR% %CMAKE_ARGS% .
+    cmake -G "%GENERATOR%" -A x64 -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" %CMAKE_ARGS%
 ) else (
-    cmake -B %BUILD_DIR% %CMAKE_ARGS% .
+    cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" %CMAKE_ARGS%
 )
 
 if errorlevel 1 (
@@ -76,7 +86,7 @@ echo.
 echo [2/3] Building...
 echo.
 
-cmake --build %BUILD_DIR% --config %BUILD_TYPE% --target hm_studio -- /m
+cmake --build "%BUILD_DIR%" --config %BUILD_TYPE% --target hm_studio -- /m
 
 if errorlevel 1 (
     echo.
@@ -90,8 +100,8 @@ echo [3/3] Done!
 echo.
 echo  Executable:  %BUILD_DIR%\%BUILD_TYPE%\HyperMotion Studio.exe
 echo.
-echo  To create a distributable package:
-echo    cd %BUILD_DIR% ^&^& cpack -C %BUILD_TYPE%
+echo  To create a distributable package (ZIP or installer):
+echo    cd "%BUILD_DIR%" ^&^& cpack -C %BUILD_TYPE%
 echo.
 
 REM --- Optionally run ---

@@ -209,16 +209,36 @@ if(HM_BUILD_GUI)
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     )
 
-    add_executable(hm_studio
+    set(HM_GUI_SOURCES
         gui/main.cpp
         gui/HyperMotionApp.cpp
-        ${IMGUI_SOURCES}
     )
+
+    # Windows: embed icon, version info, and manifest into the .exe
+    set(HM_GUI_RESOURCES "")
+    if(WIN32)
+        set(HM_GUI_RESOURCES gui/resources/hm_studio.rc)
+    endif()
+
+    # WIN32 flag: produces a Windows GUI app (no console window on launch)
+    # On non-Windows platforms this flag is silently ignored
+    add_executable(hm_studio WIN32
+        ${HM_GUI_SOURCES}
+        ${IMGUI_SOURCES}
+        ${HM_GUI_RESOURCES}
+    )
+
+    # On Windows with WIN32 subsystem, entry point is WinMain.
+    # We redirect back to standard main() via SDL-style approach.
+    if(WIN32)
+        target_link_options(hm_studio PRIVATE "/ENTRY:mainCRTStartup")
+    endif()
 
     target_include_directories(hm_studio PRIVATE
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
         ${CMAKE_CURRENT_SOURCE_DIR}/gui
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources
     )
 
     target_link_libraries(hm_studio PRIVATE
@@ -227,9 +247,29 @@ if(HM_BUILD_GUI)
         OpenGL::GL
     )
 
+    if(WIN32)
+        target_link_libraries(hm_studio PRIVATE dwmapi)
+    endif()
+
     target_compile_definitions(hm_studio PRIVATE
         IMGUI_IMPL_OPENGL_LOADER_CUSTOM
     )
+
+    # Set output name and properties
+    set_target_properties(hm_studio PROPERTIES
+        OUTPUT_NAME "HyperMotion Studio"
+        VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    # Copy required DLLs next to the .exe on Windows after build
+    if(WIN32)
+        add_custom_command(TARGET hm_studio POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_RUNTIME_DLLS:hm_studio>
+                $<TARGET_FILE_DIR:hm_studio>
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
 
     install(TARGETS hm_studio RUNTIME DESTINATION bin)
 endif()
@@ -248,3 +288,29 @@ if(HM_BUILD_TOOLS)
     install(TARGETS hm_extract hm_train hm_style hm_batch
         RUNTIME DESTINATION bin)
 endif()
+
+# -------------------------------------------------------------------
+# CPack — distributable package (ZIP portable or NSIS installer)
+# -------------------------------------------------------------------
+
+set(CPACK_PACKAGE_NAME "HyperMotion-Studio")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_VENDOR "HyperMotion")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Motion Capture & Animation System for UE5 Football Games")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "HyperMotion Studio")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE")
+
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP;NSIS")
+    set(CPACK_NSIS_DISPLAY_NAME "HyperMotion Studio")
+    set(CPACK_NSIS_PACKAGE_NAME "HyperMotion Studio")
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    set(CPACK_NSIS_CREATE_ICONS_EXTRA
+        "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\HyperMotion Studio.lnk' '$INSTDIR\\\\bin\\\\HyperMotion Studio.exe'")
+    set(CPACK_NSIS_DELETE_ICONS_EXTRA
+        "Delete '$SMPROGRAMS\\\\$START_MENU\\\\HyperMotion Studio.lnk'")
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
+
+include(CPack)

@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build options
 option(HM_BUILD_TOOLS "Build CLI tools" ON)
+option(HM_BUILD_GUI "Build GUI application (requires GLFW + Dear ImGui)" OFF)
 option(HM_BUILD_TESTS "Build tests" OFF)
 option(HM_USE_TENSORRT "Enable TensorRT backend" ON)
 option(HM_USE_CUDA "Enable CUDA support" ON)
@@ -183,6 +184,54 @@ if(HM_BUILD_TOOLS)
 
     add_executable(hm_batch tools/hm_batch.cpp)
     target_link_libraries(hm_batch PRIVATE hypermotion)
+endif()
+
+# -------------------------------------------------------------------
+# GUI Application (Dear ImGui + GLFW + OpenGL)
+# -------------------------------------------------------------------
+
+if(HM_BUILD_GUI)
+    find_package(glfw3 3.3 REQUIRED)
+    find_package(OpenGL REQUIRED)
+
+    # Dear ImGui sources — expects IMGUI_DIR to point at the imgui repo
+    if(NOT DEFINED IMGUI_DIR)
+        set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
+    endif()
+
+    set(IMGUI_SOURCES
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_demo.cpp
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    )
+
+    add_executable(hm_studio
+        gui/main.cpp
+        gui/HyperMotionApp.cpp
+        ${IMGUI_SOURCES}
+    )
+
+    target_include_directories(hm_studio PRIVATE
+        ${IMGUI_DIR}
+        ${IMGUI_DIR}/backends
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui
+    )
+
+    target_link_libraries(hm_studio PRIVATE
+        hypermotion
+        glfw
+        OpenGL::GL
+    )
+
+    target_compile_definitions(hm_studio PRIVATE
+        IMGUI_IMPL_OPENGL_LOADER_CUSTOM
+    )
+
+    install(TARGETS hm_studio RUNTIME DESTINATION bin)
 endif()
 
 # -------------------------------------------------------------------

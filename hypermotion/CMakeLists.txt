@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HyperMotion VERSION 1.0.0 LANGUAGES CXX CUDA)
+project(HyperMotion VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,8 +10,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(HM_BUILD_TOOLS "Build CLI tools" ON)
 option(HM_BUILD_GUI "Build GUI application (requires GLFW + Dear ImGui)" OFF)
 option(HM_BUILD_TESTS "Build tests" OFF)
-option(HM_USE_TENSORRT "Enable TensorRT backend" ON)
-option(HM_USE_CUDA "Enable CUDA support" ON)
+option(HM_USE_TENSORRT "Enable TensorRT backend" OFF)
+option(HM_USE_CUDA "Enable CUDA support" OFF)
 
 # -------------------------------------------------------------------
 # Dependencies
@@ -48,9 +48,18 @@ find_library(ONNXRUNTIME_LIB onnxruntime
 # nlohmann/json
 find_package(nlohmann_json 3.11 REQUIRED)
 
-# CUDA
+# CUDA (enable CUDA language only when requested and available)
 if(HM_USE_CUDA)
-    find_package(CUDAToolkit 12.0 REQUIRED)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        find_package(CUDAToolkit 12.0 REQUIRED)
+        message(STATUS "CUDA enabled — GPU acceleration available")
+    else()
+        message(WARNING "CUDA requested but no CUDA compiler found — disabling CUDA")
+        set(HM_USE_CUDA OFF)
+    endif()
 endif()
 
 # TensorRT

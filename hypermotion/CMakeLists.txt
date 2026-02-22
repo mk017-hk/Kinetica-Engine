@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build options
 option(HM_BUILD_TOOLS "Build CLI tools" ON)
+option(HM_BUILD_GUI "Build GUI application (requires GLFW + Dear ImGui)" OFF)
 option(HM_BUILD_TESTS "Build tests" OFF)
 option(HM_USE_TENSORRT "Enable TensorRT backend" ON)
 option(HM_USE_CUDA "Enable CUDA support" ON)
@@ -22,9 +23,17 @@ find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio dnn h
 # Eigen (3.4+)
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 
-# LibTorch (C++ PyTorch)
-find_package(Torch REQUIRED)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+# LibTorch (C++ PyTorch) — required for training (hm_train, hm_style),
+# optional for inference-only builds.
+find_package(Torch QUIET)
+if(Torch_FOUND)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+    set(HM_HAS_TORCH TRUE)
+    message(STATUS "LibTorch found — training modules enabled")
+else()
+    message(STATUS "LibTorch not found — training tools (hm_train, hm_style) will not have ML support")
+    set(HM_HAS_TORCH FALSE)
+endif()
 
 # ONNX Runtime
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
@@ -101,8 +110,9 @@ set(HM_SEGMENTER_SOURCES
 )
 
 set(HM_ML_SOURCES
-    src/ml/ConditionEncoder.cpp
+    src/ml/OnnxInference.cpp
     src/ml/NoiseScheduler.cpp
+    src/ml/ConditionEncoder.cpp
     src/ml/MotionTransformer.cpp
     src/ml/MotionDiffusionModel.cpp
     src/ml/MotionGenerator.cpp
@@ -145,10 +155,16 @@ target_include_directories(hypermotion PUBLIC
 target_link_libraries(hypermotion PUBLIC
     ${OpenCV_LIBS}
     Eigen3::Eigen
-    ${TORCH_LIBRARIES}
     ${ONNXRUNTIME_LIB}
     nlohmann_json::nlohmann_json
 )
+
+# LibTorch — enables training modules (MotionTransformer, ConditionEncoder,
+# StyleEncoder, TemporalConvNet, StyleTrainer, ContrastiveLoss, etc.)
+if(HM_HAS_TORCH)
+    target_link_libraries(hypermotion PUBLIC ${TORCH_LIBRARIES})
+    target_compile_definitions(hypermotion PUBLIC HM_HAS_TORCH=1)
+endif()
 
 if(HM_USE_CUDA)
     target_link_libraries(hypermotion PUBLIC CUDA::cudart)
@@ -183,6 +199,16 @@ if(HM_BUILD_TOOLS)
 
     add_executable(hm_batch tools/hm_batch.cpp)
     target_link_libraries(hm_batch PRIVATE hypermotion)
+endif()
+
+# -------------------------------------------------------------------
+# GUI Application (Dear ImGui + GLFW + OpenGL)
+# Self-contained in gui/ — has its own CMakeLists.txt, resources,
+# build scripts, and CPack packaging config.
+# -------------------------------------------------------------------
+
+if(HM_BUILD_GUI)
+    add_subdirectory(gui)
 endif()
 
 # -------------------------------------------------------------------

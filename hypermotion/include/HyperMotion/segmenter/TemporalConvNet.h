@@ -1,41 +1,85 @@
 #pragma once
 
 #include "HyperMotion/core/Types.h"
-#include <torch/torch.h>
+#include "HyperMotion/ml/OnnxInference.h"
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace hm::segmenter {
 
-// Temporal Convolutional Network for motion classification
-// 6 dilated causal conv blocks, dilation [1,2,4,8,16,32], receptive field ~190 frames
-// Hidden: 128 channels, kernel: 3
-// Each block: Conv1D -> BN -> ReLU -> Dropout(0.1) -> Conv1D -> BN -> ReLU + residual
-// Output: Conv1D(128, 16, k=1) -> per-frame logits
-// ~600K parameters
+// =========================================================================
+// ONNX inference version — used by MotionSegmenter at runtime
+// =========================================================================
 
-struct TCNBlockImpl : torch::nn::Module {
-    torch::nn::Conv1d conv1{nullptr}, conv2{nullptr};
-    torch::nn::BatchNorm1d bn1{nullptr}, bn2{nullptr};
-    torch::nn::Dropout dropout{nullptr};
-    torch::nn::Conv1d residual_conv{nullptr};
+/// ONNX-based TCN classifier for per-frame motion classification.
+class TemporalConvNetOnnx {
+public:
+    TemporalConvNetOnnx();
+    ~TemporalConvNetOnnx();
 
-    TCNBlockImpl(int inChannels, int outChannels, int kernelSize, int dilation, float dropoutRate);
+    TemporalConvNetOnnx(const TemporalConvNetOnnx&) = delete;
+    TemporalConvNetOnnx& operator=(const TemporalConvNetOnnx&) = delete;
+    TemporalConvNetOnnx(TemporalConvNetOnnx&&) noexcept;
+    TemporalConvNetOnnx& operator=(TemporalConvNetOnnx&&) noexcept;
+
+    bool load(const std::string& onnxPath, bool useGPU = true);
+    bool isLoaded() const;
+
+    /// Classify a sequence of feature vectors.
+    /// @param features  [numFrames][70] from MotionFeatureExtractor.
+    /// @return Per-frame logits [numFrames][MOTION_TYPE_COUNT].
+    std::vector<std::array<float, MOTION_TYPE_COUNT>> classify(
+        const std::vector<std::array<float, 70>>& features);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+// =========================================================================
+// LibTorch training version — used by hm_train CLI
+// =========================================================================
+
+#ifdef HM_HAS_TORCH
+#include <torch/torch.h>
+
+/// Temporal causal conv block with residual connection.
+struct TemporalBlockImpl : torch::nn::Module {
+    TemporalBlockImpl(int inChannels, int outChannels, int kernelSize,
+                       int dilation, float dropout);
     torch::Tensor forward(torch::Tensor x);
-};
-TORCH_MODULE(TCNBlock);
 
+private:
+    int padding_;
+    torch::nn::Conv1d conv1_{nullptr}, conv2_{nullptr};
+    torch::nn::BatchNorm1d bn1_{nullptr}, bn2_{nullptr};
+    torch::nn::Dropout drop_{nullptr};
+    torch::nn::Conv1d residual_{nullptr};  // 1x1 conv when channels differ
+    bool needsResidual_ = false;
+};
+
+TORCH_MODULE(TemporalBlock);
+
+/// 6-layer dilated causal TCN for motion classification (~600K params).
+///
+/// Dilations: [1, 2, 4, 8, 16, 32], hidden: 128, kernel: 3.
+/// Output: Conv1d(hidden, numClasses, 1) per-frame logits.
 struct TemporalConvNetImpl : torch::nn::Module {
-    std::vector<TCNBlock> blocks;
-    torch::nn::Conv1d input_proj{nullptr};
-    torch::nn::Conv1d output_proj{nullptr};
+    TemporalConvNetImpl(int inputDim, int hiddenDim, int numClasses);
 
-    TemporalConvNetImpl(int inputDim = 70, int hiddenDim = 128,
-                         int numClasses = MOTION_TYPE_COUNT, int kernelSize = 3,
-                         float dropout = 0.1f);
-    torch::Tensor forward(torch::Tensor x);  // [batch, features, time] -> [batch, classes, time]
+    /// @param x [B, inputDim, T]
+    /// @return  [B, numClasses, T]
+    torch::Tensor forward(torch::Tensor x);
+
+private:
+    torch::nn::ModuleList blocks_{nullptr};
+    torch::nn::Conv1d output_{nullptr};
 };
+
 TORCH_MODULE(TemporalConvNet);
+
+#endif  // HM_HAS_TORCH
 
 } // namespace hm::segmenter

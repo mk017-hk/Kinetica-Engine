@@ -1,65 +1,61 @@
 #pragma once
 
 #include "HyperMotion/core/Types.h"
-#include "HyperMotion/style/StyleEncoder.h"
-#include "HyperMotion/style/ContrastiveLoss.h"
+
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
-#include <functional>
 
 namespace hm::style {
 
-struct StyleTrainerConfig {
-    float learningRate = 1e-4f;
-    int numEpochs = 200;
-    int batchSize = 32;
-    float temperature = 0.07f;
-
-    // Data augmentation
-    bool augmentTemporalCrop = true;
-    bool augmentSpeedPerturbation = true;
-    bool augmentNoise = true;
-    float noiseStd = 0.01f;
-    float speedPerturbRange = 0.2f;  // +/- 20%
-
-    // Cosine annealing
-    float minLearningRate = 1e-6f;
-
-    std::string savePath;
-};
-
+/// A clip from a single player, used for contrastive training.
 struct TrainingPair {
     std::string playerID;
     std::vector<SkeletonFrame> clip;
 };
 
-using TrainProgressCallback = std::function<void(int epoch, float loss, float lr)>;
+struct StyleTrainerConfig {
+    int numEpochs = 200;
+    int batchSize = 32;
+    float learningRate = 1e-4f;
+    std::string savePath = "style_encoder.pt";
+};
 
+#ifdef HM_HAS_TORCH
+
+/// Trains a StyleEncoder with NT-Xent contrastive loss.
+///
+/// Data is organized as per-player clips.  Each training batch samples
+/// pairs of clips from the same and different players.
 class StyleTrainer {
 public:
-    explicit StyleTrainer(const StyleTrainerConfig& config = {});
+    explicit StyleTrainer(const StyleTrainerConfig& config);
     ~StyleTrainer();
 
     StyleTrainer(const StyleTrainer&) = delete;
     StyleTrainer& operator=(const StyleTrainer&) = delete;
-    StyleTrainer(StyleTrainer&&) noexcept;
-    StyleTrainer& operator=(StyleTrainer&&) noexcept;
 
-    // Train the style encoder
+    using ProgressCallback = std::function<void(int epoch, float loss, float lr)>;
+
+    /// Run the full training loop.
     void train(const std::vector<TrainingPair>& data,
-               TrainProgressCallback callback = nullptr);
-
-    // Get the trained encoder
-    StyleEncoder getEncoder() const;
-
-    // Save/load encoder
-    void saveEncoder(const std::string& path);
-    void loadEncoder(const std::string& path);
+               ProgressCallback callback = nullptr);
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+#else
+
+class StyleTrainer {
+public:
+    explicit StyleTrainer(const StyleTrainerConfig&) {}
+    using ProgressCallback = std::function<void(int epoch, float loss, float lr)>;
+    void train(const std::vector<TrainingPair>&, ProgressCallback = nullptr) {}
+};
+
+#endif
 
 } // namespace hm::style

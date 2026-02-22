@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 
 namespace hm::segmenter {
 
@@ -11,7 +10,7 @@ static constexpr const char* TAG = "MotionSegmenter";
 
 struct MotionSegmenter::Impl {
     MotionSegmenterConfig config;
-    TemporalConvNet model;
+    TemporalConvNetOnnx tcn;
     MotionFeatureExtractor featureExtractor;
     bool initialized = false;
 };
@@ -26,31 +25,17 @@ MotionSegmenter::MotionSegmenter(MotionSegmenter&&) noexcept = default;
 MotionSegmenter& MotionSegmenter::operator=(MotionSegmenter&&) noexcept = default;
 
 bool MotionSegmenter::initialize() {
-    try {
-        impl_->model = TemporalConvNet(
-            MotionFeatureExtractor::FEATURE_DIM, 128, MOTION_TYPE_COUNT, 3, 0.1f);
-
-        if (!impl_->config.modelPath.empty()) {
-            try {
-                torch::serialize::InputArchive archive;
-                archive.load_from(impl_->config.modelPath);
-                impl_->model->load(archive);
-                HM_LOG_INFO(TAG, "Loaded TCN model from: " + impl_->config.modelPath);
-            } catch (const std::exception& e) {
-                HM_LOG_WARN(TAG, std::string("Could not load model: ") + e.what());
-                HM_LOG_INFO(TAG, "Using untrained TCN — classification results will be random");
-            }
+    if (!impl_->config.modelPath.empty()) {
+        if (!impl_->tcn.load(impl_->config.modelPath, impl_->config.useGPU)) {
+            HM_LOG_WARN(TAG, "Could not load TCN model; classification will default to Unknown");
         }
-
-        impl_->model->eval();
-        impl_->initialized = true;
-        HM_LOG_INFO(TAG, "Motion segmenter initialized");
-        return true;
-
-    } catch (const std::exception& e) {
-        HM_LOG_ERROR(TAG, std::string("Initialization failed: ") + e.what());
-        return false;
+    } else {
+        HM_LOG_WARN(TAG, "No model path specified; classification will default to Unknown");
     }
+
+    impl_->initialized = true;
+    HM_LOG_INFO(TAG, "Motion segmenter initialized (ONNX inference)");
+    return true;
 }
 
 bool MotionSegmenter::isInitialized() const {
@@ -65,10 +50,25 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> MotionSegmenter::classifyFrame
 
     if (!impl_->initialized || numFrames == 0) return probabilities;
 
-    // Extract features
+    // Extract 70D features per frame
     auto features = impl_->featureExtractor.extractSequence(frames);
 
-    // Process using sliding windows
+    // Convert to array format for TCN
+    std::vector<std::array<float, 70>> featureArrays(numFrames);
+    for (int f = 0; f < numFrames; ++f) {
+        std::copy(features[f].begin(), features[f].end(), featureArrays[f].begin());
+    }
+
+    if (!impl_->tcn.isLoaded()) {
+        // No model: everything is Unknown
+        for (auto& p : probabilities) {
+            p.fill(0.0f);
+            p[static_cast<int>(MotionType::Unknown)] = 1.0f;
+        }
+        return probabilities;
+    }
+
+    // Sliding window inference with vote accumulation
     std::vector<std::vector<float>> allLogits(numFrames,
         std::vector<float>(MOTION_TYPE_COUNT, 0.0f));
     std::vector<int> voteCounts(numFrames, 0);
@@ -76,31 +76,20 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> MotionSegmenter::classifyFrame
     int windowSize = std::min(impl_->config.slidingWindowSize, numFrames);
     int stride = impl_->config.slidingWindowStride;
 
-    torch::NoGradGuard noGrad;
-
     for (int start = 0; start < numFrames; start += stride) {
         int end = std::min(start + windowSize, numFrames);
-        int chunkLen = end - start;
 
-        // Build input tensor: [1, features, time]
-        auto inputTensor = torch::zeros({1, MotionFeatureExtractor::FEATURE_DIM, chunkLen});
-        auto accessor = inputTensor.accessor<float, 3>();
+        // Extract window
+        std::vector<std::array<float, 70>> window(
+            featureArrays.begin() + start, featureArrays.begin() + end);
 
-        for (int t = 0; t < chunkLen; ++t) {
-            for (int f = 0; f < MotionFeatureExtractor::FEATURE_DIM; ++f) {
-                accessor[0][f][t] = features[start + t][f];
-            }
-        }
+        auto logits = impl_->tcn.classify(window);
 
-        // Forward pass
-        auto output = impl_->model->forward(inputTensor);  // [1, classes, time]
-        auto outputAcc = output.accessor<float, 3>();
-
-        // Accumulate logits
-        for (int t = 0; t < chunkLen; ++t) {
+        // Accumulate
+        for (int t = 0; t < static_cast<int>(logits.size()); ++t) {
             int frameIdx = start + t;
             for (int c = 0; c < MOTION_TYPE_COUNT; ++c) {
-                allLogits[frameIdx][c] += outputAcc[0][c][t];
+                allLogits[frameIdx][c] += logits[t][c];
             }
             voteCounts[frameIdx]++;
         }
@@ -108,18 +97,15 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> MotionSegmenter::classifyFrame
         if (end >= numFrames) break;
     }
 
-    // Average logits and compute softmax
+    // Average logits -> softmax
     for (int f = 0; f < numFrames; ++f) {
         if (voteCounts[f] > 0) {
-            float maxLogit = *std::max_element(allLogits[f].begin(), allLogits[f].end());
-            float sumExp = 0.0f;
-
             for (int c = 0; c < MOTION_TYPE_COUNT; ++c) {
                 allLogits[f][c] /= voteCounts[f];
             }
 
-            maxLogit = *std::max_element(allLogits[f].begin(), allLogits[f].end());
-
+            float maxLogit = *std::max_element(allLogits[f].begin(), allLogits[f].end());
+            float sumExp = 0.0f;
             for (int c = 0; c < MOTION_TYPE_COUNT; ++c) {
                 probabilities[f][c] = std::exp(allLogits[f][c] - maxLogit);
                 sumExp += probabilities[f][c];
@@ -128,7 +114,6 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> MotionSegmenter::classifyFrame
                 probabilities[f][c] /= sumExp;
             }
         } else {
-            // Default to Unknown
             probabilities[f].fill(0.0f);
             probabilities[f][static_cast<int>(MotionType::Unknown)] = 1.0f;
         }
@@ -143,12 +128,11 @@ std::vector<MotionSegment> MotionSegmenter::segment(
     if (!impl_->initialized || frames.empty()) return {};
 
     int numFrames = static_cast<int>(frames.size());
-
     HM_LOG_INFO(TAG, "Segmenting " + std::to_string(numFrames) + " frames");
 
     auto probabilities = classifyFrames(frames);
 
-    // Argmax per-frame classification
+    // Argmax per-frame
     std::vector<int> labels(numFrames);
     std::vector<float> confidences(numFrames);
     for (int f = 0; f < numFrames; ++f) {
@@ -164,7 +148,7 @@ std::vector<MotionSegment> MotionSegmenter::segment(
         confidences[f] = bestProb;
     }
 
-    // Merge consecutive same-label frames into segments
+    // Merge consecutive same-label frames
     std::vector<MotionSegment> segments;
     int segStart = 0;
 
@@ -176,9 +160,7 @@ std::vector<MotionSegment> MotionSegmenter::segment(
             seg.endFrame = f - 1;
             seg.trackingID = trackingID;
 
-            // Average confidence
-            float avgConf = 0.0f;
-            float avgVel = 0.0f;
+            float avgConf = 0.0f, avgVel = 0.0f;
             Vec3 avgDir{0, 0, 0};
             int count = f - segStart;
 
@@ -197,28 +179,25 @@ std::vector<MotionSegment> MotionSegmenter::segment(
         }
     }
 
-    // Enforce minimum segment length: merge short segments with neighbors
-    std::vector<MotionSegment> mergedSegments;
+    // Enforce minimum segment length
+    std::vector<MotionSegment> merged;
     for (auto& seg : segments) {
         int segLen = seg.endFrame - seg.startFrame + 1;
-
-        if (segLen < impl_->config.minSegmentLength && !mergedSegments.empty()) {
-            // Merge with previous segment
-            mergedSegments.back().endFrame = seg.endFrame;
-            // Recompute averages
-            int totalLen = mergedSegments.back().endFrame - mergedSegments.back().startFrame + 1;
+        if (segLen < impl_->config.minSegmentLength && !merged.empty()) {
+            merged.back().endFrame = seg.endFrame;
+            int totalLen = merged.back().endFrame - merged.back().startFrame + 1;
             int prevLen = totalLen - segLen;
-            mergedSegments.back().avgVelocity =
-                (mergedSegments.back().avgVelocity * prevLen + seg.avgVelocity * segLen) / totalLen;
-            mergedSegments.back().confidence =
-                (mergedSegments.back().confidence * prevLen + seg.confidence * segLen) / totalLen;
+            merged.back().avgVelocity =
+                (merged.back().avgVelocity * prevLen + seg.avgVelocity * segLen) / totalLen;
+            merged.back().confidence =
+                (merged.back().confidence * prevLen + seg.confidence * segLen) / totalLen;
         } else {
-            mergedSegments.push_back(seg);
+            merged.push_back(seg);
         }
     }
 
-    HM_LOG_INFO(TAG, "Found " + std::to_string(mergedSegments.size()) + " segments");
-    return mergedSegments;
+    HM_LOG_INFO(TAG, "Found " + std::to_string(merged.size()) + " segments");
+    return merged;
 }
 
 } // namespace hm::segmenter

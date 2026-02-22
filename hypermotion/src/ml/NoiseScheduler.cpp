@@ -1,71 +1,43 @@
 #include "HyperMotion/ml/NoiseScheduler.h"
 
-#include <cmath>
 #include <algorithm>
+#include <numeric>
 
 namespace hm::ml {
 
 NoiseScheduler::NoiseScheduler(int numTimesteps, float betaStart, float betaEnd)
-    : numTimesteps_(numTimesteps) {
-    // Linear beta schedule
-    betas_ = torch::linspace(betaStart, betaEnd, numTimesteps);
-    alphas_ = 1.0f - betas_;
-    alphasCumprod_ = torch::cumprod(alphas_, 0);
-    sqrtAlphasCumprod_ = torch::sqrt(alphasCumprod_);
-    sqrtOneMinusAlphasCumprod_ = torch::sqrt(1.0f - alphasCumprod_);
+    : numTimesteps_(numTimesteps), alphasCumprod_(numTimesteps) {
+
+    // Linear beta schedule -> cumulative product of alphas
+    float step = (betaEnd - betaStart) / static_cast<float>(numTimesteps - 1);
+    float cumprod = 1.0f;
+    for (int i = 0; i < numTimesteps; ++i) {
+        float beta = betaStart + step * static_cast<float>(i);
+        cumprod *= (1.0f - beta);
+        alphasCumprod_[i] = cumprod;
+    }
 }
 
-NoiseScheduler::~NoiseScheduler() = default;
+void NoiseScheduler::ddimStep(const float* x_t, const float* predictedNoise,
+                               int numElements, int currentStep, int nextStep,
+                               float* output) const {
 
-NoiseScheduler::NoisedSample NoiseScheduler::addNoise(
-    const torch::Tensor& x0, const torch::Tensor& t) {
-    // x0: [batch, ...], t: [batch] (integer timesteps)
+    float alphaCur  = alphasCumprod_[currentStep];
+    float alphaNext = (nextStep >= 0) ? alphasCumprod_[nextStep] : 1.0f;
 
-    auto sqrtAlpha = sqrtAlphasCumprod_.index_select(0, t);
-    auto sqrtOneMinusAlpha = sqrtOneMinusAlphasCumprod_.index_select(0, t);
+    float sqrtAlphaCur     = std::sqrt(alphaCur);
+    float sqrt1mAlphaCur   = std::sqrt(1.0f - alphaCur);
+    float sqrtAlphaNext    = std::sqrt(alphaNext);
+    float sqrt1mAlphaNext  = std::sqrt(1.0f - alphaNext);
 
-    // Reshape for broadcasting
-    auto shape = x0.sizes().vec();
-    std::vector<int64_t> broadcastShape(shape.size(), 1);
-    broadcastShape[0] = t.size(0);
-
-    sqrtAlpha = sqrtAlpha.view(broadcastShape);
-    sqrtOneMinusAlpha = sqrtOneMinusAlpha.view(broadcastShape);
-
-    auto noise = torch::randn_like(x0);
-    auto noisedData = sqrtAlpha * x0 + sqrtOneMinusAlpha * noise;
-
-    return {noisedData, noise};
-}
-
-torch::Tensor NoiseScheduler::ddimStep(
-    const torch::Tensor& xt,
-    const torch::Tensor& predictedNoise,
-    int currentStep, int nextStep) {
-
-    float alphaCurrent = alphasCumprod_[currentStep].item<float>();
-    float alphaNext = (nextStep >= 0) ? alphasCumprod_[nextStep].item<float>() : 1.0f;
-
-    // DDIM deterministic sampling (eta=0)
-    // x_{t-1} = sqrt(alpha_{t-1}) * predicted_x0 + sqrt(1-alpha_{t-1}) * direction
-    float sqrtAlphaCurrent = std::sqrt(alphaCurrent);
-    float sqrtOneMinusAlphaCurrent = std::sqrt(1.0f - alphaCurrent);
-
-    // Predicted x0
-    auto predictedX0 = (xt - sqrtOneMinusAlphaCurrent * predictedNoise) / sqrtAlphaCurrent;
-
-    // Clamp predicted x0 for stability
-    predictedX0 = torch::clamp(predictedX0, -5.0f, 5.0f);
-
-    // Direction pointing to xt
-    float sqrtOneMinusAlphaNext = std::sqrt(1.0f - alphaNext);
-    auto direction = sqrtOneMinusAlphaNext * predictedNoise;
-
-    // Next sample
-    float sqrtAlphaNext = std::sqrt(alphaNext);
-    auto xNext = sqrtAlphaNext * predictedX0 + direction;
-
-    return xNext;
+    for (int i = 0; i < numElements; ++i) {
+        // Predict x0
+        float x0 = (x_t[i] - sqrt1mAlphaCur * predictedNoise[i]) / sqrtAlphaCur;
+        // Clamp for stability
+        x0 = std::clamp(x0, -5.0f, 5.0f);
+        // DDIM deterministic step
+        output[i] = sqrtAlphaNext * x0 + sqrt1mAlphaNext * predictedNoise[i];
+    }
 }
 
 std::vector<int> NoiseScheduler::getDDIMSchedule(int numInferenceSteps) const {
@@ -78,7 +50,6 @@ std::vector<int> NoiseScheduler::getDDIMSchedule(int numInferenceSteps) const {
         t = std::clamp(t, 0, numTimesteps_ - 1);
         schedule.push_back(t);
     }
-
     return schedule;
 }
 

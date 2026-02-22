@@ -1,143 +1,122 @@
 #include "HyperMotion/ml/MotionTransformer.h"
 
+#ifdef HM_HAS_TORCH
+
 #include <cmath>
 
 namespace hm::ml {
 
-// -------------------------------------------------------------------
-// Sinusoidal Positional Encoding
-// -------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// TransformerBlock
+// -----------------------------------------------------------------------
 
-SinusoidalPEImpl::SinusoidalPEImpl(int dim) : dim(dim) {}
+TransformerBlockImpl::TransformerBlockImpl(int modelDim, int numHeads,
+                                            int ffnDim, float dropout) {
+    ln1_ = register_module("ln1", torch::nn::LayerNorm(
+        torch::nn::LayerNormOptions({modelDim})));
+    ln2_ = register_module("ln2", torch::nn::LayerNorm(
+        torch::nn::LayerNormOptions({modelDim})));
 
-torch::Tensor SinusoidalPEImpl::forward(torch::Tensor timesteps) {
-    int halfDim = dim / 2;
-    float logFactor = std::log(10000.0f) / (halfDim - 1);
+    attn_ = register_module("attn", torch::nn::MultiheadAttention(
+        torch::nn::MultiheadAttentionOptions(modelDim, numHeads)
+            .dropout(dropout)
+            .batch_first(true)));
 
-    auto freqs = torch::exp(torch::arange(halfDim, torch::kFloat32) * (-logFactor));
-    freqs = freqs.to(timesteps.device());
-
-    // [batch, 1] * [halfDim] -> [batch, halfDim]
-    auto args = timesteps.unsqueeze(-1).to(torch::kFloat32) * freqs.unsqueeze(0);
-
-    auto sinPE = torch::sin(args);
-    auto cosPE = torch::cos(args);
-
-    return torch::cat({sinPE, cosPE}, -1);  // [batch, dim]
+    ffn1_ = register_module("ffn1", torch::nn::Linear(modelDim, ffnDim));
+    ffn2_ = register_module("ffn2", torch::nn::Linear(ffnDim, modelDim));
+    drop1_ = register_module("drop1", torch::nn::Dropout(dropout));
+    drop2_ = register_module("drop2", torch::nn::Dropout(dropout));
 }
 
-// -------------------------------------------------------------------
-// Timestep Embedder
-// -------------------------------------------------------------------
-
-TimestepEmbedderImpl::TimestepEmbedderImpl(int dim) {
-    sinPE = register_module("sinPE", SinusoidalPE(dim));
-    fc1 = register_module("fc1", torch::nn::Linear(dim, dim));
-    fc2 = register_module("fc2", torch::nn::Linear(dim, dim));
-}
-
-torch::Tensor TimestepEmbedderImpl::forward(torch::Tensor timesteps) {
-    auto pe = sinPE(timesteps);
-    pe = torch::gelu(fc1(pe));
-    pe = fc2(pe);
-    return pe;  // [batch, dim]
-}
-
-// -------------------------------------------------------------------
-// Pre-Norm Transformer Layer
-// -------------------------------------------------------------------
-
-PreNormTransformerLayerImpl::PreNormTransformerLayerImpl(
-    int dim, int nHeads, int ffDim, float dropoutRate) {
-
-    norm1 = register_module("norm1",
-        torch::nn::LayerNorm(torch::nn::LayerNormOptions({dim})));
-    norm2 = register_module("norm2",
-        torch::nn::LayerNorm(torch::nn::LayerNormOptions({dim})));
-
-    attn = register_module("attn",
-        torch::nn::MultiheadAttention(
-            torch::nn::MultiheadAttentionOptions(dim, nHeads).dropout(dropoutRate)));
-
-    ff1 = register_module("ff1", torch::nn::Linear(dim, ffDim));
-    ff2 = register_module("ff2", torch::nn::Linear(ffDim, dim));
-    dropout = register_module("dropout", torch::nn::Dropout(dropoutRate));
-}
-
-torch::Tensor PreNormTransformerLayerImpl::forward(torch::Tensor x) {
+torch::Tensor TransformerBlockImpl::forward(torch::Tensor x) {
     // Pre-norm self-attention
-    auto normed = norm1(x);
-    // MultiheadAttention expects [seq_len, batch, dim]
-    auto transposed = normed.transpose(0, 1);
-    auto [attnOut, attnWeights] = attn(transposed, transposed, transposed);
-    auto attnResult = attnOut.transpose(0, 1);
-    x = x + dropout(attnResult);
+    auto normed = ln1_->forward(x);
+    auto [attnOut, _] = attn_->forward(normed, normed, normed);
+    x = x + drop1_->forward(attnOut);
 
-    // Pre-norm FFN with GELU
-    normed = norm2(x);
-    auto ffOut = ff2(dropout(torch::gelu(ff1(normed))));
-    x = x + dropout(ffOut);
+    // Pre-norm feed-forward (GELU activation)
+    normed = ln2_->forward(x);
+    auto ff = drop2_->forward(ffn2_->forward(torch::gelu(ffn1_->forward(normed))));
+    x = x + ff;
 
     return x;
 }
 
-// -------------------------------------------------------------------
-// Motion Transformer
-// -------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// MotionTransformer
+// -----------------------------------------------------------------------
 
-MotionTransformerImpl::MotionTransformerImpl(
-    int motionDim, int condDim, int modelDim,
-    int nHeads, int nLayers, int ffDim, float dropout) {
-
-    input_proj = register_module("input_proj",
+MotionTransformerImpl::MotionTransformerImpl(int motionDim, int condDim,
+                                              int modelDim, int numHeads,
+                                              int numLayers, int ffnDim,
+                                              float dropout)
+    : modelDim_(modelDim) {
+    inputProj_ = register_module("input_proj",
         torch::nn::Linear(motionDim, modelDim));
-    cond_proj = register_module("cond_proj",
+
+    // Timestep embedding MLP: sinusoidal(modelDim) -> modelDim
+    timeMLPfc1_ = register_module("time_mlp_fc1",
+        torch::nn::Linear(modelDim, modelDim));
+    timeMLPfc2_ = register_module("time_mlp_fc2",
+        torch::nn::Linear(modelDim, modelDim));
+
+    condProj_ = register_module("cond_proj",
         torch::nn::Linear(condDim, modelDim));
-    output_proj = register_module("output_proj",
-        torch::nn::Linear(modelDim, motionDim));
 
-    timestep_embedder = register_module("timestep_embedder",
-        TimestepEmbedder(modelDim));
-
-    for (int i = 0; i < nLayers; ++i) {
-        auto layer = PreNormTransformerLayer(modelDim, nHeads, ffDim, dropout);
-        layers.push_back(register_module("layer_" + std::to_string(i), layer));
+    blocks_ = register_module("blocks", torch::nn::ModuleList());
+    for (int i = 0; i < numLayers; ++i) {
+        blocks_->push_back(TransformerBlock(modelDim, numHeads, ffnDim, dropout));
     }
 
-    final_norm = register_module("final_norm",
+    finalNorm_ = register_module("final_norm",
         torch::nn::LayerNorm(torch::nn::LayerNormOptions({modelDim})));
+    outputProj_ = register_module("output_proj",
+        torch::nn::Linear(modelDim, motionDim));
 }
 
-torch::Tensor MotionTransformerImpl::forward(
-    torch::Tensor x, torch::Tensor t, torch::Tensor cond) {
-    // x: [batch, seq_len, 132]
-    // t: [batch] (integer timesteps)
-    // cond: [batch, 256] (encoded condition)
+torch::Tensor MotionTransformerImpl::sinusoidalEmbedding(torch::Tensor t, int dim) {
+    int halfDim = dim / 2;
+    auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(t.device());
+    auto freqs = torch::exp(
+        -std::log(10000.0) * torch::arange(halfDim, opts) /
+        static_cast<float>(halfDim));
 
-    int batchSize = x.size(0);
-    int seqLen = x.size(1);
+    // t: [B] -> [B,1], freqs: [halfDim] -> [1,halfDim]
+    auto angles = t.unsqueeze(-1).to(torch::kFloat32) * freqs.unsqueeze(0);
+    return torch::cat({torch::sin(angles), torch::cos(angles)}, /*dim=*/-1);  // [B, dim]
+}
 
-    // Project input to model dimension
-    auto h = input_proj(x);  // [batch, seq_len, 512]
+torch::Tensor MotionTransformerImpl::forward(torch::Tensor x,
+                                              torch::Tensor t,
+                                              torch::Tensor cond) {
+    // x:    [B, S, motionDim]
+    // t:    [B]  (int64 timesteps)
+    // cond: [B, condDim]
 
-    // Timestep embedding
-    auto tEmb = timestep_embedder(t);  // [batch, 512]
-    h = h + tEmb.unsqueeze(1);  // Broadcast over sequence
+    // Project input motion
+    auto h = inputProj_->forward(x);  // [B, S, modelDim]
 
-    // Condition embedding
-    auto condEmb = cond_proj(cond);  // [batch, 512]
-    h = h + condEmb.unsqueeze(1);  // Broadcast over sequence
+    // Timestep embedding: sinusoidal -> MLP
+    auto tEmb = sinusoidalEmbedding(t, modelDim_);  // [B, modelDim]
+    tEmb = torch::gelu(timeMLPfc1_->forward(tEmb));
+    tEmb = timeMLPfc2_->forward(tEmb);              // [B, modelDim]
 
-    // Transformer layers
-    for (auto& layer : layers) {
-        h = layer(h);
+    // Condition projection
+    auto cEmb = condProj_->forward(cond);            // [B, modelDim]
+
+    // Add time + condition as bias to every token
+    h = h + tEmb.unsqueeze(1) + cEmb.unsqueeze(1);  // [B, S, modelDim]
+
+    // Transformer blocks
+    for (const auto& block : *blocks_) {
+        h = block->as<TransformerBlockImpl>()->forward(h);
     }
 
-    h = final_norm(h);
-
-    // Project back to motion dimension
-    auto output = output_proj(h);  // [batch, seq_len, 132]
-    return output;
+    // Final norm + output projection
+    h = finalNorm_->forward(h);
+    return outputProj_->forward(h);  // [B, S, motionDim]
 }
 
 } // namespace hm::ml
+
+#endif

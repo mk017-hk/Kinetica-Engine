@@ -4,13 +4,12 @@
 #include "HyperMotion/ml/MotionDiffusionModel.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace hm::ml {
 
 struct MotionGeneratorConfig {
     MotionDiffusionConfig diffusionConfig;
-    std::string condEncoderModelPath;
-    std::string transformerModelPath;
     bool enableJointLimits = true;
     bool enableFootContactCleanup = true;
     bool enablePlausibilityCheck = true;
@@ -29,10 +28,10 @@ public:
     bool initialize();
     bool isInitialized() const;
 
-    // High-level: MotionCondition -> GeneratedMotion (64 frames)
+    /// High-level: MotionCondition -> GeneratedMotion (64 frames)
     GeneratedMotion generate(const MotionCondition& condition);
 
-    // Batch generation
+    /// Batch generation
     std::vector<GeneratedMotion> generateBatch(const std::vector<MotionCondition>& conditions);
 
 private:

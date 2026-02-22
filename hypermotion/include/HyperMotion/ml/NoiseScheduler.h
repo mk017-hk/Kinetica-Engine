@@ -1,45 +1,37 @@
 #pragma once
 
-#include <torch/torch.h>
 #include <vector>
+#include <cmath>
 
 namespace hm::ml {
 
+/// Pure-math DDIM noise scheduler for inference.
+/// No neural network weights — just the beta/alpha schedule and DDIM stepping.
+/// This replaces the old LibTorch-based NoiseScheduler.
 class NoiseScheduler {
 public:
     explicit NoiseScheduler(int numTimesteps = 1000,
                              float betaStart = 0.0001f,
                              float betaEnd = 0.02f);
-    ~NoiseScheduler();
 
-    // Add noise to clean data at timestep t
-    // Returns noised data and the noise that was added
-    struct NoisedSample {
-        torch::Tensor noisedData;
-        torch::Tensor noise;
-    };
-    NoisedSample addNoise(const torch::Tensor& x0, const torch::Tensor& t);
+    /// Precomputed alpha cumulative product at timestep t.
+    float alphasCumprod(int t) const { return alphasCumprod_[t]; }
 
-    // DDIM sampling step
-    torch::Tensor ddimStep(const torch::Tensor& xt,
-                           const torch::Tensor& predictedNoise,
-                           int currentStep, int nextStep);
+    /// DDIM deterministic sampling step (operates on raw float buffers).
+    /// x_t and predictedNoise are flat arrays of the same length.
+    /// Result is written into output (same length).
+    void ddimStep(const float* x_t, const float* predictedNoise,
+                  int numElements, int currentStep, int nextStep,
+                  float* output) const;
 
-    // Get DDIM inference timestep schedule (e.g., 50 steps)
+    /// Get DDIM inference sub-schedule (e.g. 50 evenly-spaced timesteps).
     std::vector<int> getDDIMSchedule(int numInferenceSteps = 50) const;
 
     int numTimesteps() const { return numTimesteps_; }
 
-    // Access precomputed schedule values
-    torch::Tensor alphasCumprod() const { return alphasCumprod_; }
-
 private:
     int numTimesteps_;
-    torch::Tensor betas_;
-    torch::Tensor alphas_;
-    torch::Tensor alphasCumprod_;
-    torch::Tensor sqrtAlphasCumprod_;
-    torch::Tensor sqrtOneMinusAlphasCumprod_;
+    std::vector<float> alphasCumprod_;
 };
 
 } // namespace hm::ml

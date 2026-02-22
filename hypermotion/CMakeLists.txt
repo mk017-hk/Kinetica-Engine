@@ -225,3 +225,34 @@ if(HM_BUILD_TOOLS)
     install(TARGETS hm_extract hm_train hm_style hm_batch
         RUNTIME DESTINATION bin)
 endif()
+
+# -------------------------------------------------------------------
+# Tests (GoogleTest)
+# -------------------------------------------------------------------
+
+if(HM_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    enable_testing()
+
+    add_executable(hm_tests
+        tests/test_types.cpp
+        tests/test_mathutils.cpp
+        tests/test_signal.cpp
+        tests/test_export.cpp
+        tests/test_noise_scheduler.cpp
+        tests/test_skeleton.cpp
+    )
+    target_link_libraries(hm_tests PRIVATE hypermotion GTest::gtest_main)
+    target_include_directories(hm_tests PRIVATE ${HM_INCLUDE_DIR})
+
+    include(GoogleTest)
+    gtest_discover_tests(hm_tests)
+endif()

@@ -1,7 +1,10 @@
 #include "HyperMotion/pose/DepthLifter.h"
 #include "HyperMotion/core/Logger.h"
 
+#ifdef HM_HAS_TORCH
 #include <torch/torch.h>
+#endif
+
 #include <cmath>
 #include <algorithm>
 
@@ -9,6 +12,7 @@ namespace hm::pose {
 
 static constexpr const char* TAG = "DepthLifter";
 
+#ifdef HM_HAS_TORCH
 // Learned lifting network:
 // Linear(34,1024) -> BN -> ReLU -> [Linear(1024,1024) -> BN -> ReLU + skip] x2 -> Linear(1024,51)
 struct LiftingNetImpl : torch::nn::Module {
@@ -61,10 +65,13 @@ struct LiftingNetImpl : torch::nn::Module {
     }
 };
 TORCH_MODULE(LiftingNet);
+#endif  // HM_HAS_TORCH
 
 struct DepthLifter::Impl {
     DepthLifterConfig config;
+#ifdef HM_HAS_TORCH
     LiftingNet model;
+#endif
     bool initialized = false;
     bool hasModel = false;
 
@@ -75,7 +82,6 @@ struct DepthLifter::Impl {
         std::array<Keypoint3D, COCO_KEYPOINTS> result{};
 
         // Estimate depth from torso length ratio
-        // Torso = distance from neck (index 0 in COCO: nose, but we use shoulder midpoint)
         // Using left/right shoulder (5,6) and hip (11,12) in COCO format
 
         float leftShoulderY = keypoints2D[5].position.y;
@@ -94,6 +100,7 @@ struct DepthLifter::Impl {
 
         // Estimate depth as proportional to bbox height
         float bboxHeightNorm = bbox.height / std::max(1.0f, static_cast<float>(bbox.height));
+        (void)bboxHeightNorm;
         float baseDepth = config.defaultSubjectHeight * 2.0f;
 
         for (int k = 0; k < COCO_KEYPOINTS; ++k) {
@@ -131,6 +138,7 @@ DepthLifter& DepthLifter::operator=(DepthLifter&&) noexcept = default;
 
 bool DepthLifter::initialize() {
     try {
+#ifdef HM_HAS_TORCH
         impl_->model = LiftingNet();
 
         if (!impl_->config.modelPath.empty()) {
@@ -152,6 +160,9 @@ bool DepthLifter::initialize() {
         }
 
         impl_->model->eval();
+#else
+        HM_LOG_INFO(TAG, "LibTorch not available, using geometric fallback for 2D->3D lifting");
+#endif
         impl_->initialized = true;
         return true;
 
@@ -182,6 +193,7 @@ std::array<Keypoint3D, COCO_KEYPOINTS> DepthLifter::lift(
         return impl_->geometricFallback(keypoints2D, bbox);
     }
 
+#ifdef HM_HAS_TORCH
     // Prepare input: 17 keypoints x 2D = 34, normalised relative to bbox centre
     std::vector<float> input(34);
     float cx = bbox.centerX();
@@ -210,6 +222,9 @@ std::array<Keypoint3D, COCO_KEYPOINTS> DepthLifter::lift(
     }
 
     return result;
+#else
+    return impl_->geometricFallback(keypoints2D, bbox);
+#endif
 }
 
 std::vector<std::array<Keypoint3D, COCO_KEYPOINTS>> DepthLifter::liftBatch(
@@ -228,6 +243,7 @@ std::vector<std::array<Keypoint3D, COCO_KEYPOINTS>> DepthLifter::liftBatch(
         return results;
     }
 
+#ifdef HM_HAS_TORCH
     int batchSize = static_cast<int>(keypoints2DList.size());
     std::vector<float> inputBatch(batchSize * 34);
 
@@ -262,6 +278,15 @@ std::vector<std::array<Keypoint3D, COCO_KEYPOINTS>> DepthLifter::liftBatch(
     }
 
     return results;
+#else
+    std::vector<std::array<Keypoint3D, COCO_KEYPOINTS>> results;
+    results.reserve(keypoints2DList.size());
+    for (size_t i = 0; i < keypoints2DList.size(); ++i) {
+        results.push_back(impl_->geometricFallback(keypoints2DList[i],
+                          i < bboxes.size() ? bboxes[i] : BBox{}));
+    }
+    return results;
+#endif
 }
 
 } // namespace hm::pose

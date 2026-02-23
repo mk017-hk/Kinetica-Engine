@@ -85,6 +85,7 @@ std::array<float, STYLE_DIM> StyleEncoderOnnx::encode(const std::vector<Skeleton
                   inputData.begin() + f * STYLE_INPUT_DIM);
     }
 
+#ifdef HM_HAS_ONNXRUNTIME
     std::vector<int64_t> inputShape = {1, static_cast<int64_t>(numFrames),
                                         static_cast<int64_t>(STYLE_INPUT_DIM)};
     auto& memInfo = impl_->onnx.memoryInfo();
@@ -99,6 +100,11 @@ std::array<float, STYLE_DIM> StyleEncoderOnnx::encode(const std::vector<Skeleton
     // Output: [1, 64]
     const float* embData = outputs[0].GetTensorData<float>();
     std::copy_n(embData, STYLE_DIM, embedding.begin());
+#else
+    (void)inputData;
+    HM_LOG_WARN(TAG, "ONNX Runtime not available, returning zero embedding");
+    return embedding;
+#endif
 
     // L2 normalize
     float norm = 0.0f;

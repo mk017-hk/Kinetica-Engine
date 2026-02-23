@@ -3,13 +3,46 @@
 #  Self-contained build for the desktop .exe / binary
 # ===================================================================
 
-# Dependencies only the GUI needs
-find_package(glfw3 3.3 REQUIRED)
+include(FetchContent)
+
+# --- GLFW: try system first, fall back to FetchContent ---
+find_package(glfw3 3.3 QUIET)
+if(NOT glfw3_FOUND)
+    message(STATUS "GLFW not found on system — fetching...")
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG        3.4
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(glfw)
+    message(STATUS "GLFW fetched")
+else()
+    message(STATUS "GLFW found on system")
+endif()
+
 find_package(OpenGL REQUIRED)
 
-# Dear ImGui sources — expects IMGUI_DIR to point at the imgui repo
+# --- Dear ImGui: use IMGUI_DIR if set, otherwise fetch ---
 if(NOT DEFINED IMGUI_DIR)
     set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
+endif()
+
+if(NOT EXISTS "${IMGUI_DIR}/imgui.cpp")
+    message(STATUS "Dear ImGui not found at ${IMGUI_DIR} — fetching...")
+    FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.91.8
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(imgui)
+    set(IMGUI_DIR "${imgui_SOURCE_DIR}")
+    message(STATUS "Dear ImGui fetched to ${IMGUI_DIR}")
 endif()
 
 set(IMGUI_SOURCES

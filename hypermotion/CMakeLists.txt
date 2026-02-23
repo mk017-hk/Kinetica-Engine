@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+include(FetchContent)
+
 # Build options
 option(HM_BUILD_TOOLS "Build CLI tools" ON)
 option(HM_BUILD_GUI "Build GUI application (requires GLFW + Dear ImGui)" OFF)
@@ -14,14 +16,97 @@ option(HM_USE_TENSORRT "Enable TensorRT backend" OFF)
 option(HM_USE_CUDA "Enable CUDA support" OFF)
 
 # -------------------------------------------------------------------
-# Dependencies
+# Dependencies — try system packages first, fall back to FetchContent
 # -------------------------------------------------------------------
 
-# OpenCV (4.8+)
-find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio dnn highgui)
+# OpenCV (4.2+)
+find_package(OpenCV 4.2 QUIET COMPONENTS core imgproc imgcodecs videoio dnn highgui)
+if(NOT OpenCV_FOUND)
+    message(STATUS "OpenCV not found on system — fetching from source (minimal modules)...")
+    set(BUILD_LIST "core,imgproc,imgcodecs,videoio,dnn,highgui" CACHE STRING "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_PERF_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_opencv_apps OFF CACHE BOOL "" FORCE)
+    set(BUILD_opencv_python3 OFF CACHE BOOL "" FORCE)
+    set(BUILD_opencv_python2 OFF CACHE BOOL "" FORCE)
+    set(BUILD_opencv_java OFF CACHE BOOL "" FORCE)
+    set(BUILD_opencv_js OFF CACHE BOOL "" FORCE)
+    set(WITH_FFMPEG OFF CACHE BOOL "" FORCE)
+    set(WITH_GSTREAMER OFF CACHE BOOL "" FORCE)
+    set(WITH_GTK OFF CACHE BOOL "" FORCE)
+    set(WITH_QT OFF CACHE BOOL "" FORCE)
+    set(WITH_V4L OFF CACHE BOOL "" FORCE)
+    set(WITH_PROTOBUF ON CACHE BOOL "" FORCE)
+    set(BUILD_PROTOBUF ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        opencv
+        GIT_REPOSITORY https://github.com/opencv/opencv.git
+        GIT_TAG        4.10.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(opencv)
+    set(OpenCV_LIBS opencv_core opencv_imgproc opencv_imgcodecs opencv_videoio opencv_dnn opencv_highgui)
+    # When built from source, include dirs may not propagate via targets.
+    # Generated headers (opencv_modules.hpp, cvconfig.h) go to CMAKE_BINARY_DIR.
+    set(OpenCV_INCLUDE_DIRS
+        "${opencv_SOURCE_DIR}/modules/core/include"
+        "${opencv_SOURCE_DIR}/modules/imgproc/include"
+        "${opencv_SOURCE_DIR}/modules/imgcodecs/include"
+        "${opencv_SOURCE_DIR}/modules/videoio/include"
+        "${opencv_SOURCE_DIR}/modules/dnn/include"
+        "${opencv_SOURCE_DIR}/modules/highgui/include"
+        "${opencv_SOURCE_DIR}/modules/calib3d/include"
+        "${opencv_SOURCE_DIR}/modules/features2d/include"
+        "${opencv_SOURCE_DIR}/modules/flann/include"
+        "${CMAKE_BINARY_DIR}"
+    )
+    set(HM_OPENCV_FROM_SOURCE TRUE)
+    message(STATUS "OpenCV fetched and will be built from source")
+else()
+    message(STATUS "OpenCV ${OpenCV_VERSION} found on system")
+endif()
 
-# Eigen (3.4+)
-find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+# Eigen (3.4+) — header-only
+find_package(Eigen3 3.4 QUIET NO_MODULE)
+if(NOT Eigen3_FOUND)
+    find_package(Eigen3 QUIET)
+endif()
+if(NOT Eigen3_FOUND)
+    message(STATUS "Eigen3 not found on system — fetching (header-only)...")
+    FetchContent_Declare(
+        eigen
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG        3.4.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_Populate(eigen)
+    add_library(Eigen3::Eigen INTERFACE IMPORTED)
+    set_target_properties(Eigen3::Eigen PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${eigen_SOURCE_DIR}"
+    )
+    message(STATUS "Eigen3 fetched (header-only from ${eigen_SOURCE_DIR})")
+else()
+    message(STATUS "Eigen3 ${Eigen3_VERSION} found on system")
+endif()
+
+# nlohmann/json — header-only
+find_package(nlohmann_json 3.11 QUIET)
+if(NOT nlohmann_json_FOUND)
+    message(STATUS "nlohmann/json not found on system — fetching...")
+    set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        v3.11.3
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+    message(STATUS "nlohmann/json fetched")
+else()
+    message(STATUS "nlohmann/json ${nlohmann_json_VERSION} found on system")
+endif()
 
 # LibTorch (C++ PyTorch) — required for training (hm_train, hm_style),
 # optional for inference-only builds.
@@ -35,7 +120,7 @@ else()
     set(HM_HAS_TORCH FALSE)
 endif()
 
-# ONNX Runtime
+# ONNX Runtime — optional
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
     PATHS "${ONNXRUNTIME_ROOT}/include"
           "/usr/local/include/onnxruntime"
@@ -44,9 +129,13 @@ find_library(ONNXRUNTIME_LIB onnxruntime
     PATHS "${ONNXRUNTIME_ROOT}/lib"
           "/usr/local/lib"
           "/usr/lib")
-
-# nlohmann/json
-find_package(nlohmann_json 3.11 REQUIRED)
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIB)
+    message(STATUS "ONNX Runtime found")
+else()
+    message(STATUS "ONNX Runtime not found — inference features will use stubs")
+    set(ONNXRUNTIME_INCLUDE_DIR "")
+    set(ONNXRUNTIME_LIB "")
+endif()
 
 # CUDA (enable CUDA language only when requested and available)
 if(HM_USE_CUDA)
@@ -158,15 +247,23 @@ add_library(hypermotion STATIC
 
 target_include_directories(hypermotion PUBLIC
     ${HM_INCLUDE_DIR}
-    ${ONNXRUNTIME_INCLUDE_DIR}
 )
+
+if(HM_OPENCV_FROM_SOURCE)
+    target_include_directories(hypermotion PUBLIC ${OpenCV_INCLUDE_DIRS})
+endif()
 
 target_link_libraries(hypermotion PUBLIC
     ${OpenCV_LIBS}
     Eigen3::Eigen
-    ${ONNXRUNTIME_LIB}
     nlohmann_json::nlohmann_json
 )
+
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIB)
+    target_include_directories(hypermotion PUBLIC ${ONNXRUNTIME_INCLUDE_DIR})
+    target_link_libraries(hypermotion PUBLIC ${ONNXRUNTIME_LIB})
+    target_compile_definitions(hypermotion PUBLIC HM_HAS_ONNXRUNTIME=1)
+endif()
 
 # LibTorch — enables training modules (MotionTransformer, ConditionEncoder,
 # StyleEncoder, TemporalConvNet, StyleTrainer, ContrastiveLoss, etc.)

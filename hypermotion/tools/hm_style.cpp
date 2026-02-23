@@ -159,6 +159,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (args.encodeMode) {
+#ifdef HM_HAS_TORCH
         hm::style::StyleEncoder encoder;
         if (!args.modelPath.empty()) {
             torch::serialize::InputArchive archive;
@@ -217,6 +218,10 @@ int main(int argc, char* argv[]) {
         std::string libPath = args.outputDir + "/style_library.json";
         library.saveJSON(libPath);
         std::cout << "Style library saved to: " << libPath << "\n";
+#else
+        std::cerr << "Encode mode requires LibTorch. Rebuild with -DTorch_DIR=<path-to-libtorch>\n";
+        return 1;
+#endif
     }
 
     return 0;

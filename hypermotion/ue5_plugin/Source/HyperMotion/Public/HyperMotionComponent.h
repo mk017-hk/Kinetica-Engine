@@ -154,12 +154,51 @@ public:
     UFUNCTION(BlueprintPure, Category = "HyperMotion")
     bool HasBall() const;
 
+    UFUNCTION(BlueprintPure, Category = "HyperMotion")
+    float GetAcceleration() const;
+
+    UFUNCTION(BlueprintPure, Category = "HyperMotion")
+    float GetTurnRate() const;
+
+    UFUNCTION(BlueprintCallable, Category = "HyperMotion")
+    void ForceMovementState(EHMMovementState NewState, float Duration = 0.5f);
+
+    UFUNCTION(BlueprintPure, Category = "HyperMotion")
+    float GetTimeInCurrentState() const;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "HyperMotion|Computed")
+    float SmoothedSpeed = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "HyperMotion|Computed")
+    float Acceleration = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "HyperMotion|Computed")
+    bool bIsAccelerating = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "HyperMotion|Computed")
+    bool bIsDecelerating = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "HyperMotion|Computed")
+    float StrideFrequency = 1.0f;
+
 private:
     void UpdateMovementState();
     void ComputeDerivedValues(float DeltaTime);
+    void UpdateFatigue(float DeltaTime);
+    EHMMovementState ClassifySpeedState(float CurrentSpeed) const;
 
     FVector PreviousPosition;
     FVector CurrentVelocity;
+    FVector PreviousVelocity;
     float PreviousDirection = 0.0f;
     float TurnRate = 0.0f;
+    float PreviousSpeed = 0.0f;
+    float TimeInState = 0.0f;
+    float ForcedStateDuration = 0.0f;
+    bool bHasForcedState = false;
+    EHMMovementState ForcedState = EHMMovementState::Idle;
+
+    static constexpr float SpeedSmoothFactor = 0.15f;
+    static constexpr float FatigueSprintRate = 0.02f;
+    static constexpr float FatigueRecoveryRate = 0.03f;
 };

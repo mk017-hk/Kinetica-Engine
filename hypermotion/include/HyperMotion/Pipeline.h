@@ -29,6 +29,21 @@ struct PipelineConfig {
     bool splitBySegment = true;
     std::string outputDirectory;
     std::string outputFormat = "json";  // "json", "bvh", "both"
+    int minTrackFrames = 10;            // Minimum frames to keep a track
+};
+
+/// Timing and statistics from a pipeline run.
+struct PipelineStats {
+    double poseExtractionMs = 0.0;
+    double skeletonMappingMs = 0.0;
+    double signalProcessingMs = 0.0;
+    double segmentationMs = 0.0;
+    double exportMs = 0.0;
+    double totalMs = 0.0;
+    int totalFramesProcessed = 0;
+    int trackedPersons = 0;
+    int clipsProduced = 0;
+    int segmentsFound = 0;
 };
 
 using PipelineProgressCallback = std::function<void(float percent, const std::string& stage)>;
@@ -55,6 +70,9 @@ public:
                                                PipelineProgressCallback callback = nullptr);
     std::vector<AnimClip> buildClips(const std::vector<PoseFrameResult>& poseResults);
     void exportClips(const std::vector<AnimClip>& clips, const std::string& outputDir);
+
+    /// Get timing statistics from the last processVideo() call.
+    const PipelineStats& getLastStats() const;
 
 private:
     struct Impl;

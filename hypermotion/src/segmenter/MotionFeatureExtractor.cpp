@@ -191,7 +191,7 @@ MotionType MotionFeatureExtractor::classifyHeuristic(
     float armActivity = (bodyStats.leftArmVelocity + bodyStats.rightArmVelocity) * 0.5f;
 
     // Classify based on speed/acceleration/angular velocity thresholds
-    // Speed thresholds match UE5 component: Idle<10, Walk<120, Jog<250, Run<450, Sprint>450
+    // Speed thresholds (cm/s): Idle<10, Walk<120, Jog<250, Run<450, Sprint>450
 
     if (avgSpeed < 10.0f) return MotionType::Idle;
 

@@ -13,6 +13,20 @@ if(NOT glfw3_FOUND)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+    if(NOT WIN32)
+        # Wayland needs wayland-scanner; X11 needs libxrandr-dev.
+        # Disable whichever backend is missing to avoid hard errors
+        # when building on minimal Linux environments.
+        include(CheckIncludeFile)
+        check_include_file("X11/extensions/Xrandr.h" HAS_XRANDR)
+        if(NOT HAS_XRANDR)
+            set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
+        endif()
+        find_program(_WAYLAND_SCANNER wayland-scanner)
+        if(NOT _WAYLAND_SCANNER)
+            set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+        endif()
+    endif()
     FetchContent_Declare(
         glfw
         GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -97,9 +111,10 @@ if(WIN32)
     target_link_libraries(hm_studio PRIVATE dwmapi)
 endif()
 
-target_compile_definitions(hm_studio PRIVATE
-    IMGUI_IMPL_OPENGL_LOADER_CUSTOM
-)
+# Let Dear ImGui use its built-in minimal GL loader
+# (imgui_impl_opengl3_loader.h). Do NOT define
+# IMGUI_IMPL_OPENGL_LOADER_CUSTOM unless an external
+# loader like GLAD or GLEW is linked.
 
 # Output name and Visual Studio working directory
 set_target_properties(hm_studio PROPERTIES
@@ -126,7 +141,7 @@ install(TARGETS hm_studio RUNTIME DESTINATION bin)
 set(CPACK_PACKAGE_NAME "HyperMotion-Studio")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR "HyperMotion")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Motion Capture & Animation System for UE5 Football Games")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Video-to-Animation Pipeline Studio")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "HyperMotion Studio")
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/../LICENSE")

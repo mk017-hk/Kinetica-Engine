@@ -734,7 +734,7 @@ void HyperMotionApp::renderAboutPopup() {
     ImGui::Text("HyperMotion Studio v1.0.0");
     ImGui::Separator();
     ImGui::Text("Full Motion Capture & Animation System");
-    ImGui::Text("for UE5 Football Games");
+    ImGui::Text("Video-to-Animation Pipeline");
     ImGui::Spacing();
     ImGui::Text("Modules:");
     ImGui::BulletText("Multi-Person Pose Estimation (YOLOv8 + HRNet)");
@@ -743,8 +743,7 @@ void HyperMotionApp::renderAboutPopup() {
     ImGui::BulletText("Motion Segmentation (TCN)");
     ImGui::BulletText("ML Animation Generation (Diffusion)");
     ImGui::BulletText("Player Style Fingerprinting");
-    ImGui::BulletText("UE5 Runtime Plugin");
-    ImGui::BulletText("BVH/JSON Export");
+    ImGui::BulletText("BVH/JSON Export Pipeline");
 
     if (ImGui::Button("Close")) {
         showAbout_ = false;
@@ -941,6 +940,12 @@ void HyperMotionApp::addVideoFiles(const std::vector<std::string>& paths) {
 void HyperMotionApp::startProcessing() {
     if (isProcessing_ || videoQueue_.empty()) return;
 
+    // Join any previous (finished) thread before creating a new one,
+    // otherwise the move-assignment below would call std::terminate().
+    if (processingThread_.joinable()) {
+        processingThread_.join();
+    }
+
     isProcessing_ = true;
     stopRequested_ = false;
 
@@ -964,7 +969,9 @@ void HyperMotionApp::startProcessing() {
         addLog(LogMessage::Level::Success, "Batch processing complete");
     });
 
-    processingThread_.detach();
+    // Do not detach — shutdown() will join if still running.
+    // The thread is move-assigned so any previous thread must
+    // already be finished (detached or joined) before this point.
 }
 
 void HyperMotionApp::stopProcessing() {

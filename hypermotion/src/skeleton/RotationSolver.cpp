@@ -34,14 +34,33 @@ void RotationSolver::solve(
     const auto& offsets = getRestPoseBoneOffsets();
     std::array<Quat, JOINT_COUNT> worldRotations;
 
-    // Compute root rotation from hip orientation
-    // Use spine direction as primary indicator
+    // Compute root rotation using two direction vectors for full 3-DOF constraint:
+    // 1. Spine direction (primary axis)
+    // 2. Hip left-to-right direction (constrains twist around spine axis)
     Vec3 currentSpineDir = (worldPositions[static_cast<int>(Joint::Spine)] -
                             worldPositions[static_cast<int>(Joint::Hips)]).normalized();
     Vec3 restSpineDir = offsets[static_cast<int>(Joint::Spine)].normalized();
 
-    if (currentSpineDir.lengthSq() > kEpsilon && restSpineDir.lengthSq() > kEpsilon) {
-        outRootRotation = MathUtils::rotationBetween(restSpineDir, currentSpineDir);
+    Vec3 restHipVec = offsets[static_cast<int>(Joint::RightUpLeg)] -
+                      offsets[static_cast<int>(Joint::LeftUpLeg)];
+    Vec3 worldHipVec = worldPositions[static_cast<int>(Joint::RightUpLeg)] -
+                       worldPositions[static_cast<int>(Joint::LeftUpLeg)];
+
+    if (currentSpineDir.lengthSq() > kEpsilon && restSpineDir.lengthSq() > kEpsilon &&
+        restHipVec.lengthSq() > kEpsilon && worldHipVec.lengthSq() > kEpsilon) {
+        // Build orthonormal frames via Gram-Schmidt
+        Vec3 ry = restSpineDir;
+        Vec3 rx = (restHipVec - ry * ry.dot(restHipVec)).normalized();
+        Vec3 rz = rx.cross(ry).normalized();
+
+        Vec3 wy = currentSpineDir;
+        Vec3 wx = (worldHipVec - wy * wy.dot(worldHipVec)).normalized();
+        Vec3 wz = wx.cross(wy).normalized();
+
+        Mat3 restFrame, worldFrame;
+        restFrame.setCol(0, rx); restFrame.setCol(1, ry); restFrame.setCol(2, rz);
+        worldFrame.setCol(0, wx); worldFrame.setCol(1, wy); worldFrame.setCol(2, wz);
+        outRootRotation = MathUtils::mat3ToQuat(worldFrame * restFrame.transposed()).normalized();
     } else {
         outRootRotation = Quat::identity();
     }

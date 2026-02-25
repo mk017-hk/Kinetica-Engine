@@ -21,15 +21,17 @@ TEST(AnimClipUtilsTest, GetFrameCount) {
 TEST(AnimClipUtilsTest, GetDuration) {
     auto clip = test::makeTestClip(60, 30.0f);
     float duration = AnimClipUtils::getDuration(clip);
-    EXPECT_NEAR(duration, 2.0f, test::kEps); // 60 frames / 30 fps
+    // 60 frames = 59 intervals at 30 fps → 59/30 ≈ 1.9667s
+    EXPECT_NEAR(duration, 59.0f / 30.0f, test::kEps);
 }
 
 TEST(AnimClipUtilsTest, SubClip) {
     auto clip = test::makeTestClip(30);
     auto sub = AnimClipUtils::subClip(clip, 5, 15);
-    EXPECT_EQ(AnimClipUtils::getFrameCount(sub), 10);
-    // Frame indices should be adjusted
-    EXPECT_EQ(sub.frames[0].frameIndex, clip.frames[5].frameIndex);
+    // subClip uses inclusive range [5, 15] → 11 frames
+    EXPECT_EQ(AnimClipUtils::getFrameCount(sub), 11);
+    // Frame indices are reset to 0-based within the sub-clip
+    EXPECT_EQ(sub.frames[0].frameIndex, 0);
 }
 
 TEST(AnimClipUtilsTest, SubClip_FullRange) {

@@ -1,14 +1,27 @@
-#include "HyperMotion/ml/MotionDiffusionModel.h"
-#include "HyperMotion/segmenter/TemporalConvNet.h"
-#include "HyperMotion/segmenter/MotionFeatureExtractor.h"
 #include "HyperMotion/core/Logger.h"
 #include "HyperMotion/core/MathUtils.h"
-#include "HyperMotion/export/JSONExporter.h"
 
 #include <iostream>
 #include <string>
+
+#ifndef HM_HAS_TORCH
+
+int main(int, char*[]) {
+    std::cerr << "hm_train requires LibTorch. Rebuild with -DTorch_DIR=<path-to-libtorch>\n";
+    return 1;
+}
+
+#else  // HM_HAS_TORCH
+
+#include "HyperMotion/ml/MotionDiffusionModel.h"
+#include "HyperMotion/segmenter/TemporalConvNet.h"
+#include "HyperMotion/segmenter/MotionFeatureExtractor.h"
+#include "HyperMotion/export/JSONExporter.h"
+
 #include <filesystem>
 #include <fstream>
+#include <numeric>
+#include <random>
 
 #include <nlohmann/json.hpp>
 #include <torch/torch.h>
@@ -287,3 +300,5 @@ int main(int argc, char* argv[]) {
     std::cerr << "Unknown mode: " << args.mode << "\n";
     return 1;
 }
+
+#endif  // HM_HAS_TORCH

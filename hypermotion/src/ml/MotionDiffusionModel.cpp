@@ -114,6 +114,7 @@ std::vector<float> MotionDiffusionModel::generateRaw(const std::vector<float>& c
     std::vector<float> predictedNoise(totalElements);
     std::vector<float> xNext(totalElements);
 
+#ifdef HM_HAS_ONNXRUNTIME
     auto& memInfo = impl_->denoiser.memoryInfo();
 
     for (size_t i = 0; i < schedule.size(); ++i) {
@@ -148,6 +149,13 @@ std::vector<float> MotionDiffusionModel::generateRaw(const std::vector<float>& c
                                    totalElements, currentStep, nextStep, xNext.data());
         std::swap(x, xNext);
     }
+#else
+    (void)schedule;
+    (void)predictedNoise;
+    (void)xNext;
+    HM_LOG_ERROR(TAG, "ONNX Runtime not available — cannot run inference");
+    return {};
+#endif
 
     return x;  // [seqLen * motionDim] flat
 }
@@ -170,7 +178,7 @@ std::vector<SkeletonFrame> MotionDiffusionModel::generate(const std::vector<floa
                 rot6d[k] = frameData[j * ROTATION_DIM + k];
             }
             frames[f].joints[j].rotation6D = rot6d;
-            frames[f].joints[j].localRotation = MathUtils::rotation6DToQuat(rot6d);
+            frames[f].joints[j].localRotation = MathUtils::rot6DToQuat(rot6d);
             frames[f].joints[j].localEulerDeg = MathUtils::quatToEulerDeg(
                 frames[f].joints[j].localRotation);
             frames[f].joints[j].confidence = 1.0f;

@@ -1,0 +1,90 @@
+# HyperMotion Studio — GUI Build Requirements
+#
+# The GUI is a C++ application (Dear ImGui + GLFW + OpenGL).
+# There is no Python involved. Install the dependencies below
+# for your platform, then run the build script.
+#
+# ===================================================================
+#  LINUX (Ubuntu/Debian)
+# ===================================================================
+#
+# Required — compiler & build tools:
+#   sudo apt install build-essential g++-12 cmake git
+#
+# Required — core libraries:
+#   sudo apt install libopencv-dev libeigen3-dev nlohmann-json3-dev
+#
+# Required — GUI libraries:
+#   sudo apt install libglfw3-dev libgl-dev
+#
+# Required — Dear ImGui (header-only, fetched from source):
+#   git clone https://github.com/ocornut/imgui.git third_party/imgui
+#   (or set IMGUI_DIR=/path/to/imgui when building)
+#
+# Optional — ONNX Runtime (for model inference):
+#   Download from https://github.com/microsoft/onnxruntime/releases
+#   export ONNXRUNTIME_ROOT=/path/to/onnxruntime
+#
+# Optional — LibTorch (for training):
+#   Download from https://pytorch.org (C++ / cxx11 ABI / Linux)
+#   export Torch_DIR=/path/to/libtorch/share/cmake/Torch
+#
+# Optional — CUDA + TensorRT (for GPU acceleration):
+#   Install CUDA Toolkit 12.0+ from https://developer.nvidia.com/cuda-downloads
+#   Install TensorRT 8.6+ from https://developer.nvidia.com/tensorrt
+#
+# Build:
+#   cd hypermotion
+#   mkdir build && cd build
+#   cmake .. -DHM_BUILD_GUI=ON -DHM_BUILD_TOOLS=ON
+#   cmake --build . -j$(nproc)
+#
+# Or use the script:
+#   ./gui/build.sh
+#
+# ===================================================================
+#  WINDOWS
+# ===================================================================
+#
+# Required — compiler:
+#   Visual Studio 2022 with "Desktop development with C++" workload
+#   https://visualstudio.microsoft.com/
+#
+# Required — CMake 3.20+:
+#   https://cmake.org/download/
+#   (also included with Visual Studio)
+#
+# Required — vcpkg (easiest way to install C++ libraries):
+#   git clone https://github.com/microsoft/vcpkg.git
+#   cd vcpkg && bootstrap-vcpkg.bat
+#   vcpkg install opencv4 eigen3 nlohmann-json glfw3
+#   set CMAKE_TOOLCHAIN_FILE=C:\path\to\vcpkg\scripts\buildsystems\vcpkg.cmake
+#
+# Required — Dear ImGui:
+#   git clone https://github.com/ocornut/imgui.git third_party\imgui
+#   (or set IMGUI_DIR=C:\path\to\imgui)
+#
+# Optional — ONNX Runtime:
+#   Download from https://github.com/microsoft/onnxruntime/releases
+#   set ONNXRUNTIME_ROOT=C:\path\to\onnxruntime
+#
+# Optional — LibTorch:
+#   Download from https://pytorch.org (C++ / Release / Windows)
+#   set TORCH_DIR=C:\path\to\libtorch\share\cmake\Torch
+#
+# Build:
+#   gui\build.bat
+#
+# ===================================================================
+#  macOS
+# ===================================================================
+#
+# Required:
+#   xcode-select --install
+#   brew install cmake opencv eigen nlohmann-json glfw
+#
+# Required — Dear ImGui:
+#   git clone https://github.com/ocornut/imgui.git third_party/imgui
+#
+# Build:
+#   ./gui/build.sh

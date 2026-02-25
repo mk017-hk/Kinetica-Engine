@@ -60,10 +60,20 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> MotionSegmenter::classifyFrame
     }
 
     if (!impl_->tcn.isLoaded()) {
-        // No model: everything is Unknown
-        for (auto& p : probabilities) {
-            p.fill(0.0f);
-            p[static_cast<int>(MotionType::Unknown)] = 1.0f;
+        // No model: use heuristic classification based on velocity/acceleration
+        HM_LOG_DEBUG(TAG, "TCN not loaded, using heuristic classification");
+
+        // Classify using sliding windows
+        int heuristicWindow = std::max(10, impl_->config.minSegmentLength);
+        for (int f = 0; f < numFrames; ++f) {
+            int wStart = std::max(0, f - heuristicWindow / 2);
+            int wEnd = std::min(numFrames, f + heuristicWindow / 2);
+
+            MotionType hType = impl_->featureExtractor.classifyHeuristic(frames, wStart, wEnd);
+            int typeIdx = static_cast<int>(hType);
+
+            probabilities[f].fill(0.05f / (MOTION_TYPE_COUNT - 1));
+            probabilities[f][typeIdx] = 0.95f;
         }
         return probabilities;
     }

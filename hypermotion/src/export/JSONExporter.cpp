@@ -16,6 +16,9 @@ JSONExporter::~JSONExporter() = default;
 std::string JSONExporter::exportToString(const AnimClip& clip) {
     nlohmann::json j;
 
+    // Schema version (always included)
+    j["schemaVersion"] = HM_SCHEMA_VERSION;
+
     // Metadata
     if (config_.includeMetadata) {
         j["metadata"]["name"] = clip.name;
@@ -120,6 +123,17 @@ std::string JSONExporter::exportToString(const AnimClip& clip) {
 bool JSONExporter::exportToFile(const AnimClip& clip, const std::string& path) {
     std::string content = exportToString(clip);
 
+    // Ensure parent directory exists
+    std::filesystem::path filePath(path);
+    if (filePath.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(filePath.parent_path(), ec);
+        if (ec) {
+            HM_LOG_ERROR(TAG, "Cannot create directory: " + filePath.parent_path().string());
+            return false;
+        }
+    }
+
     std::ofstream ofs(path);
     if (!ofs.is_open()) {
         HM_LOG_ERROR(TAG, "Cannot open file: " + path);
@@ -154,6 +168,109 @@ bool JSONExporter::exportBatchToFile(const std::vector<AnimClip>& clips, const s
 
     HM_LOG_INFO(TAG, "Exported " + std::to_string(clips.size()) + " clips to: " + path);
     return true;
+}
+
+// -------------------------------------------------------------------
+// Batch directory export
+// -------------------------------------------------------------------
+
+JSONExporter::BatchResult JSONExporter::exportBatchToDirectory(
+    const std::vector<AnimClip>& clips,
+    const std::string& outputDirectory,
+    const std::string& prefix,
+    ProgressCallback progress) {
+
+    BatchResult result;
+    result.totalClips = static_cast<int>(clips.size());
+
+    std::filesystem::create_directories(outputDirectory);
+
+    for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+        const auto& clip = clips[i];
+        std::string name = clip.name.empty() ? "clip_" + std::to_string(i) : clip.name;
+        std::string path = outputDirectory + "/" + prefix + "_" + name + ".json";
+
+        if (progress) progress(i + 1, result.totalClips, name);
+
+        if (exportToFile(clip, path)) {
+            result.successCount++;
+            result.exportedPaths.push_back(path);
+        } else {
+            result.failCount++;
+            result.failedClips.push_back(name);
+        }
+    }
+    return result;
+}
+
+// -------------------------------------------------------------------
+// Streaming export
+// -------------------------------------------------------------------
+
+bool JSONExporter::exportToStream(const AnimClip& clip, std::ostream& out) {
+    std::string content = exportToString(clip);
+    out << content;
+    return !out.fail();
+}
+
+// -------------------------------------------------------------------
+// Style-enriched export
+// -------------------------------------------------------------------
+
+bool JSONExporter::exportWithStyle(const AnimClip& clip, const PlayerStyle& style, const std::string& path) {
+    std::string content = exportWithStyleToString(clip, style);
+    std::ofstream ofs(path);
+    if (!ofs.is_open()) return false;
+    ofs << content;
+    return true;
+}
+
+std::string JSONExporter::exportWithStyleToString(const AnimClip& clip, const PlayerStyle& style) {
+    // Get base export, parse, add style, re-serialize
+    std::string base = exportToString(clip);
+    auto j = nlohmann::json::parse(base);
+    nlohmann::json sj;
+    sj["playerID"] = style.playerID;
+    sj["playerName"] = style.playerName;
+    sj["embedding"] = style.embedding;
+    j["style"] = sj;
+    return config_.prettyPrint ? j.dump(2) : j.dump();
+}
+
+// -------------------------------------------------------------------
+// Internal helpers (minimal implementations for declared interface)
+// -------------------------------------------------------------------
+
+void JSONExporter::buildMetadata(void*, const AnimClip&) const {}
+void JSONExporter::buildHierarchy(void*) const {}
+void JSONExporter::buildRestPose(void*) const {}
+void JSONExporter::buildFrame(void*, const SkeletonFrame&) const {}
+void JSONExporter::buildJoint(void*, const JointTransform&, int) const {}
+void JSONExporter::buildJointCompact(void*, const JointTransform&, int) const {}
+void JSONExporter::buildSegments(void*, const std::vector<MotionSegment>&) const {}
+void JSONExporter::buildStyle(void*, const PlayerStyle&) const {}
+void JSONExporter::writeStreamHeader(std::ostream&, const AnimClip&) const {}
+void JSONExporter::writeStreamFrameChunk(std::ostream&, const AnimClip&, int, int, bool) const {}
+void JSONExporter::writeStreamFooter(std::ostream&, const AnimClip&) const {}
+
+bool JSONExporter::ensureDirectoryExists(const std::string& path) {
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);
+    return !ec;
+}
+
+std::string JSONExporter::sanitiseFilename(const std::string& name) {
+    std::string result;
+    for (char c : name) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') result += c;
+        else if (c == ' ') result += '_';
+    }
+    return result.empty() ? "unnamed" : result;
+}
+
+float JSONExporter::roundToPrecision(float value) const {
+    float factor = std::pow(10.0f, static_cast<float>(config_.floatPrecision));
+    return std::round(value * factor) / factor;
 }
 
 } // namespace hm::xport

@@ -2,6 +2,7 @@
 
 #include "HyperMotion/core/Types.h"
 #include <array>
+#include <memory>
 
 namespace hm::skeleton {
 

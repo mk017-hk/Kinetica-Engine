@@ -2,8 +2,21 @@
 #include "HyperMotion/core/MathUtils.h"
 
 #include <cmath>
+#include <algorithm>
+#include <numeric>
+#include <limits>
 
 namespace hm::segmenter {
+
+static constexpr float kSprintSpeed = 800.0f;   // cm/s
+static constexpr float kMaxTurnRate = 360.0f;    // deg/s
+
+// Joint group indices for body-part analysis
+static constexpr int kTorsoJoints[] = {0, 1, 2, 3, 4, 5};   // Hips -> Head
+static constexpr int kLeftArmJoints[] = {6, 7, 8, 9};         // LShoulder -> LHand
+static constexpr int kRightArmJoints[] = {10, 11, 12, 13};    // RShoulder -> RHand
+static constexpr int kLeftLegJoints[] = {14, 15, 16, 17};     // LUpLeg -> LToeBase
+static constexpr int kRightLegJoints[] = {18, 19, 20, 21};    // RUpLeg -> RToeBase
 
 MotionFeatureExtractor::MotionFeatureExtractor() = default;
 MotionFeatureExtractor::~MotionFeatureExtractor() = default;
@@ -12,22 +25,22 @@ std::vector<float> MotionFeatureExtractor::extract(const SkeletonFrame& frame) {
     std::vector<float> features(FEATURE_DIM, 0.0f);
     int idx = 0;
 
-    // 22 joints x 3 Euler angles = 66D
+    // 22 joints x 3 Euler angles = 66D (normalized to [-1, 1])
     for (int j = 0; j < JOINT_COUNT; ++j) {
         const auto& euler = frame.joints[j].localEulerDeg;
-        features[idx++] = euler.x / 180.0f;  // Normalize to [-1, 1]
+        features[idx++] = euler.x / 180.0f;
         features[idx++] = euler.y / 180.0f;
         features[idx++] = euler.z / 180.0f;
     }
 
-    // Root velocity 3D (normalize by typical sprint speed ~800 cm/s)
-    features[idx++] = frame.rootVelocity.x / 800.0f;
-    features[idx++] = frame.rootVelocity.y / 800.0f;
-    features[idx++] = frame.rootVelocity.z / 800.0f;
+    // Root velocity 3D (normalized by sprint speed)
+    features[idx++] = frame.rootVelocity.x / kSprintSpeed;
+    features[idx++] = frame.rootVelocity.y / kSprintSpeed;
+    features[idx++] = frame.rootVelocity.z / kSprintSpeed;
 
-    // Root angular velocity magnitude (normalize by typical turn rate ~360 deg/s)
+    // Root angular velocity magnitude
     float angularMag = frame.rootAngularVel.length();
-    features[idx++] = angularMag / 360.0f;
+    features[idx++] = angularMag / kMaxTurnRate;
 
     return features;
 }
@@ -40,6 +53,175 @@ std::vector<std::vector<float>> MotionFeatureExtractor::extractSequence(
         features.push_back(extract(frame));
     }
     return features;
+}
+
+std::vector<std::vector<float>> MotionFeatureExtractor::extractSequenceExtended(
+    const std::vector<SkeletonFrame>& frames) {
+
+    auto baseFeatures = extractSequence(frames);
+    int numFrames = static_cast<int>(frames.size());
+
+    std::vector<std::vector<float>> extended(numFrames,
+        std::vector<float>(EXTENDED_FEATURE_DIM, 0.0f));
+
+    for (int f = 0; f < numFrames; ++f) {
+        // Copy base features [0..69]
+        std::copy(baseFeatures[f].begin(), baseFeatures[f].end(), extended[f].begin());
+
+        // Delta features [70..139]: frame-to-frame differences
+        if (f > 0) {
+            for (int d = 0; d < FEATURE_DIM; ++d) {
+                extended[f][FEATURE_DIM + d] = baseFeatures[f][d] - baseFeatures[f - 1][d];
+            }
+        }
+        // else: delta features remain zero for the first frame
+    }
+
+    return extended;
+}
+
+float MotionFeatureExtractor::computeJointGroupVelocity(
+    const std::vector<SkeletonFrame>& frames,
+    const int* jointIndices, int numJoints,
+    int startFrame, int endFrame) {
+
+    if (endFrame <= startFrame) return 0.0f;
+
+    float totalVelocity = 0.0f;
+    int count = 0;
+
+    for (int f = startFrame + 1; f <= endFrame && f < static_cast<int>(frames.size()); ++f) {
+        for (int ji = 0; ji < numJoints; ++ji) {
+            int j = jointIndices[ji];
+            Vec3 delta{
+                frames[f].joints[j].localEulerDeg.x - frames[f - 1].joints[j].localEulerDeg.x,
+                frames[f].joints[j].localEulerDeg.y - frames[f - 1].joints[j].localEulerDeg.y,
+                frames[f].joints[j].localEulerDeg.z - frames[f - 1].joints[j].localEulerDeg.z
+            };
+            totalVelocity += delta.length();
+            count++;
+        }
+    }
+
+    return count > 0 ? totalVelocity / count : 0.0f;
+}
+
+float MotionFeatureExtractor::computeJointGroupROM(
+    const std::vector<SkeletonFrame>& frames,
+    const int* jointIndices, int numJoints,
+    int startFrame, int endFrame) {
+
+    if (endFrame <= startFrame) return 0.0f;
+
+    float totalROM = 0.0f;
+
+    for (int ji = 0; ji < numJoints; ++ji) {
+        int j = jointIndices[ji];
+
+        // Track min/max Euler per axis across the window
+        float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
+        float minY = minX, maxY = maxX;
+        float minZ = minX, maxZ = maxX;
+
+        for (int f = startFrame; f <= endFrame && f < static_cast<int>(frames.size()); ++f) {
+            const auto& e = frames[f].joints[j].localEulerDeg;
+            minX = std::min(minX, e.x); maxX = std::max(maxX, e.x);
+            minY = std::min(minY, e.y); maxY = std::max(maxY, e.y);
+            minZ = std::min(minZ, e.z); maxZ = std::max(maxZ, e.z);
+        }
+
+        // ROM = sum of axis ranges
+        totalROM += (maxX - minX) + (maxY - minY) + (maxZ - minZ);
+    }
+
+    return numJoints > 0 ? totalROM / numJoints : 0.0f;
+}
+
+MotionFeatureExtractor::BodyPartStats MotionFeatureExtractor::computeBodyPartStats(
+    const std::vector<SkeletonFrame>& frames, int startFrame, int endFrame) {
+
+    BodyPartStats stats;
+
+    stats.torsoVelocity    = computeJointGroupVelocity(frames, kTorsoJoints, 6, startFrame, endFrame);
+    stats.leftArmVelocity  = computeJointGroupVelocity(frames, kLeftArmJoints, 4, startFrame, endFrame);
+    stats.rightArmVelocity = computeJointGroupVelocity(frames, kRightArmJoints, 4, startFrame, endFrame);
+    stats.leftLegVelocity  = computeJointGroupVelocity(frames, kLeftLegJoints, 4, startFrame, endFrame);
+    stats.rightLegVelocity = computeJointGroupVelocity(frames, kRightLegJoints, 4, startFrame, endFrame);
+
+    stats.torsoROM    = computeJointGroupROM(frames, kTorsoJoints, 6, startFrame, endFrame);
+    stats.leftArmROM  = computeJointGroupROM(frames, kLeftArmJoints, 4, startFrame, endFrame);
+    stats.rightArmROM = computeJointGroupROM(frames, kRightArmJoints, 4, startFrame, endFrame);
+    stats.leftLegROM  = computeJointGroupROM(frames, kLeftLegJoints, 4, startFrame, endFrame);
+    stats.rightLegROM = computeJointGroupROM(frames, kRightLegJoints, 4, startFrame, endFrame);
+
+    return stats;
+}
+
+MotionType MotionFeatureExtractor::classifyHeuristic(
+    const std::vector<SkeletonFrame>& frames, int startFrame, int endFrame) {
+
+    if (frames.empty() || startFrame >= endFrame) return MotionType::Unknown;
+
+    int count = endFrame - startFrame;
+    float totalSpeed = 0.0f;
+    float totalAngularVel = 0.0f;
+    float maxSpeed = 0.0f;
+    float totalAcceleration = 0.0f;
+    float prevSpeed = 0.0f;
+
+    for (int f = startFrame; f < endFrame && f < static_cast<int>(frames.size()); ++f) {
+        float speed = frames[f].rootVelocity.length();
+        totalSpeed += speed;
+        maxSpeed = std::max(maxSpeed, speed);
+        totalAngularVel += frames[f].rootAngularVel.length();
+
+        if (f > startFrame) {
+            totalAcceleration += speed - prevSpeed;
+        }
+        prevSpeed = speed;
+    }
+
+    float avgSpeed = totalSpeed / count;
+    float avgAngularVel = totalAngularVel / count;
+    float avgAcceleration = count > 1 ? totalAcceleration / (count - 1) : 0.0f;
+
+    // Check body part activity
+    auto bodyStats = computeBodyPartStats(frames, startFrame, endFrame);
+    float legActivity = (bodyStats.leftLegVelocity + bodyStats.rightLegVelocity) * 0.5f;
+    float armActivity = (bodyStats.leftArmVelocity + bodyStats.rightArmVelocity) * 0.5f;
+
+    // Classify based on speed/acceleration/angular velocity thresholds
+    // Speed thresholds match UE5 component: Idle<10, Walk<120, Jog<250, Run<450, Sprint>450
+
+    if (avgSpeed < 10.0f) return MotionType::Idle;
+
+    // High angular velocity => turning
+    if (avgAngularVel > 90.0f && avgSpeed > 10.0f) {
+        return MotionType::TurnLeft;  // We can't distinguish L/R without direction info
+    }
+
+    // Strong deceleration from high speed
+    if (avgAcceleration < -200.0f && maxSpeed > 300.0f) {
+        return MotionType::Decelerate;
+    }
+
+    // Detect special actions: high leg activity with low root speed suggests kick/tackle
+    if (legActivity > 30.0f && avgSpeed < 100.0f) {
+        // Asymmetric leg activity => kick
+        float legAsymmetry = std::abs(bodyStats.leftLegVelocity - bodyStats.rightLegVelocity);
+        if (legAsymmetry > 15.0f) return MotionType::Kick;
+    }
+
+    // Low leg activity, some arm activity => could be shielding or receiving
+    if (armActivity > 20.0f && legActivity < 5.0f && avgSpeed < 50.0f) {
+        return MotionType::Receive;
+    }
+
+    // Speed-based classification
+    if (avgSpeed < 120.0f) return MotionType::Walk;
+    if (avgSpeed < 250.0f) return MotionType::Jog;
+    if (avgSpeed < 450.0f) return MotionType::Sprint;  // Run maps to Sprint for simplicity
+    return MotionType::Sprint;
 }
 
 } // namespace hm::segmenter

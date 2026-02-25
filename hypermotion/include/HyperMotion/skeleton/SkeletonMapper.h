@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HyperMotion/core/Types.h"
+#include <memory>
 #include <vector>
 
 namespace hm::skeleton {

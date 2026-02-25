@@ -3,10 +3,19 @@
 
 #include <filesystem>
 #include <set>
+#include <chrono>
+#include <sstream>
 
 namespace hm {
 
 static constexpr const char* TAG = "Pipeline";
+
+using Clock = std::chrono::high_resolution_clock;
+
+static double elapsedMs(Clock::time_point start) {
+    auto end = Clock::now();
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 struct Pipeline::Impl {
     PipelineConfig config;
@@ -17,6 +26,7 @@ struct Pipeline::Impl {
     xport::BVHExporter bvhExporter;
     xport::JSONExporter jsonExporter;
     bool initialized = false;
+    PipelineStats lastStats;
 
     Impl(const PipelineConfig& cfg)
         : config(cfg)
@@ -56,6 +66,10 @@ bool Pipeline::isInitialized() const {
     return impl_->initialized;
 }
 
+const PipelineStats& Pipeline::getLastStats() const {
+    return impl_->lastStats;
+}
+
 std::vector<PoseFrameResult> Pipeline::extractPoses(
     const std::string& videoPath, PipelineProgressCallback callback) {
 
@@ -70,7 +84,12 @@ std::vector<PoseFrameResult> Pipeline::extractPoses(
         if (callback) callback(pct * 0.5f, "Pose Extraction: " + msg);
     };
 
-    return impl_->poseEstimator.processVideo(videoPath, poseCB);
+    auto start = Clock::now();
+    auto result = impl_->poseEstimator.processVideo(videoPath, poseCB);
+    impl_->lastStats.poseExtractionMs = elapsedMs(start);
+    impl_->lastStats.totalFramesProcessed = static_cast<int>(result.size());
+
+    return result;
 }
 
 std::vector<AnimClip> Pipeline::buildClips(
@@ -86,25 +105,33 @@ std::vector<AnimClip> Pipeline::buildClips(
         }
     }
 
+    impl_->lastStats.trackedPersons = static_cast<int>(trackingIDs.size());
     HM_LOG_INFO(TAG, "Building clips for " + std::to_string(trackingIDs.size()) + " tracked persons");
 
     std::vector<AnimClip> clips;
 
     for (int id : trackingIDs) {
         // Step 1: Map COCO keypoints to skeleton
+        auto mapStart = Clock::now();
         auto skeletonFrames = impl_->skeletonMapper.mapSequence(poseResults, id);
+        impl_->lastStats.skeletonMappingMs += elapsedMs(mapStart);
 
-        if (skeletonFrames.size() < 10) {
+        if (static_cast<int>(skeletonFrames.size()) < impl_->config.minTrackFrames) {
             HM_LOG_DEBUG(TAG, "Skipping track " + std::to_string(id) +
                          " (only " + std::to_string(skeletonFrames.size()) + " frames)");
             continue;
         }
 
         // Step 2: Signal processing (smoothing, filtering)
+        auto signalStart = Clock::now();
         impl_->signalPipeline.process(skeletonFrames);
+        impl_->lastStats.signalProcessingMs += elapsedMs(signalStart);
 
         // Step 3: Motion segmentation
+        auto segStart = Clock::now();
         auto segments = impl_->motionSegmenter.segment(skeletonFrames, id);
+        impl_->lastStats.segmentationMs += elapsedMs(segStart);
+        impl_->lastStats.segmentsFound += static_cast<int>(segments.size());
 
         // Build clip
         AnimClip clip;
@@ -127,17 +154,19 @@ std::vector<AnimClip> Pipeline::buildClips(
             }
         }
         if (!splitClips.empty()) {
-            // Keep both full clips and split clips
             clips.insert(clips.end(), splitClips.begin(), splitClips.end());
         }
     }
 
+    impl_->lastStats.clipsProduced = static_cast<int>(clips.size());
     HM_LOG_INFO(TAG, "Built " + std::to_string(clips.size()) + " animation clips");
     return clips;
 }
 
 void Pipeline::exportClips(const std::vector<AnimClip>& clips, const std::string& outputDir) {
     if (clips.empty()) return;
+
+    auto exportStart = Clock::now();
 
     std::filesystem::create_directories(outputDir);
 
@@ -153,11 +182,16 @@ void Pipeline::exportClips(const std::vector<AnimClip>& clips, const std::string
         }
     }
 
+    impl_->lastStats.exportMs = elapsedMs(exportStart);
     HM_LOG_INFO(TAG, "Exported " + std::to_string(clips.size()) + " clips to: " + outputDir);
 }
 
 std::vector<AnimClip> Pipeline::processVideo(
     const std::string& videoPath, PipelineProgressCallback callback) {
+
+    // Reset stats
+    impl_->lastStats = PipelineStats{};
+    auto totalStart = Clock::now();
 
     // Step 1: Extract poses (0-50%)
     auto poseResults = extractPoses(videoPath, callback);
@@ -173,6 +207,23 @@ std::vector<AnimClip> Pipeline::processVideo(
     if (!impl_->config.outputDirectory.empty()) {
         exportClips(clips, impl_->config.outputDirectory);
     }
+
+    impl_->lastStats.totalMs = elapsedMs(totalStart);
+
+    // Log summary stats
+    std::ostringstream ss;
+    ss << "Pipeline complete: "
+       << impl_->lastStats.totalFramesProcessed << " frames, "
+       << impl_->lastStats.trackedPersons << " persons, "
+       << impl_->lastStats.clipsProduced << " clips, "
+       << impl_->lastStats.segmentsFound << " segments | "
+       << "Timings: pose=" << static_cast<int>(impl_->lastStats.poseExtractionMs) << "ms, "
+       << "skeleton=" << static_cast<int>(impl_->lastStats.skeletonMappingMs) << "ms, "
+       << "signal=" << static_cast<int>(impl_->lastStats.signalProcessingMs) << "ms, "
+       << "segment=" << static_cast<int>(impl_->lastStats.segmentationMs) << "ms, "
+       << "export=" << static_cast<int>(impl_->lastStats.exportMs) << "ms, "
+       << "total=" << static_cast<int>(impl_->lastStats.totalMs) << "ms";
+    HM_LOG_INFO(TAG, ss.str());
 
     if (callback) callback(100.0f, "Complete");
 

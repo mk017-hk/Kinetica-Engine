@@ -4,6 +4,8 @@
 
 namespace hm::ml {
 
+#ifdef HM_HAS_ONNXRUNTIME
+
 struct OnnxInference::Impl {
     Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "HyperMotion"};
     std::unique_ptr<Ort::Session> session;
@@ -39,7 +41,6 @@ bool OnnxInference::load(const std::string& modelPath, bool useGPU) {
         impl_->session = std::make_unique<Ort::Session>(
             impl_->env, modelPath.c_str(), impl_->sessionOpts);
 
-        // Cache input/output names
         Ort::AllocatorWithDefaultOptions alloc;
         for (size_t i = 0; i < impl_->session->GetInputCount(); ++i) {
             auto name = impl_->session->GetInputNameAllocated(i, alloc);
@@ -50,7 +51,6 @@ bool OnnxInference::load(const std::string& modelPath, bool useGPU) {
             impl_->outputNames.emplace_back(name.get());
         }
 
-        // Build const char* arrays for Run()
         impl_->inputNamePtrs.clear();
         for (auto& n : impl_->inputNames) impl_->inputNamePtrs.push_back(n.c_str());
         impl_->outputNamePtrs.clear();
@@ -82,5 +82,30 @@ size_t OnnxInference::numOutputs() const { return impl_->outputNames.size(); }
 const std::vector<std::string>& OnnxInference::inputNames()  const { return impl_->inputNames; }
 const std::vector<std::string>& OnnxInference::outputNames() const { return impl_->outputNames; }
 Ort::MemoryInfo& OnnxInference::memoryInfo() { return impl_->memInfo; }
+
+#else  // !HM_HAS_ONNXRUNTIME
+
+struct OnnxInference::Impl {
+    std::vector<std::string> emptyNames;
+    bool loaded = false;
+};
+
+OnnxInference::OnnxInference() : impl_(std::make_unique<Impl>()) {}
+OnnxInference::~OnnxInference() = default;
+OnnxInference::OnnxInference(OnnxInference&&) noexcept = default;
+OnnxInference& OnnxInference::operator=(OnnxInference&&) noexcept = default;
+
+bool OnnxInference::load(const std::string& modelPath, bool /*useGPU*/) {
+    HM_LOG_WARN("OnnxInference", "ONNX Runtime not available. Cannot load: " + modelPath);
+    return false;
+}
+
+bool OnnxInference::isLoaded() const { return false; }
+size_t OnnxInference::numInputs()  const { return 0; }
+size_t OnnxInference::numOutputs() const { return 0; }
+const std::vector<std::string>& OnnxInference::inputNames()  const { return impl_->emptyNames; }
+const std::vector<std::string>& OnnxInference::outputNames() const { return impl_->emptyNames; }
+
+#endif  // HM_HAS_ONNXRUNTIME
 
 } // namespace hm::ml

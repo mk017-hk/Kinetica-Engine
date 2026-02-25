@@ -40,6 +40,7 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> TemporalConvNetOnnx::classify(
         return result;
     }
 
+#ifdef HM_HAS_ONNXRUNTIME
     // Flatten to [1, numFrames, 70]
     std::vector<float> inputData(numFrames * 70);
     for (int f = 0; f < numFrames; ++f) {
@@ -64,6 +65,13 @@ std::vector<std::array<float, MOTION_TYPE_COUNT>> TemporalConvNetOnnx::classify(
         const float* frameLogits = logits + f * MOTION_TYPE_COUNT;
         std::copy_n(frameLogits, MOTION_TYPE_COUNT, result[f].begin());
     }
+#else
+    // ONNX Runtime not available — return uniform Unknown
+    for (auto& r : result) {
+        r.fill(0.0f);
+        r[static_cast<int>(MotionType::Unknown)] = 1.0f;
+    }
+#endif
 
     return result;
 }

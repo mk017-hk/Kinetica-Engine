@@ -3,6 +3,8 @@
 
 #include <cmath>
 #include <numeric>
+#include <sstream>
+#include <iomanip>
 
 namespace hm::style {
 
@@ -85,6 +87,7 @@ std::array<float, STYLE_DIM> StyleEncoderOnnx::encode(const std::vector<Skeleton
                   inputData.begin() + f * STYLE_INPUT_DIM);
     }
 
+#ifdef HM_HAS_ONNXRUNTIME
     std::vector<int64_t> inputShape = {1, static_cast<int64_t>(numFrames),
                                         static_cast<int64_t>(STYLE_INPUT_DIM)};
     auto& memInfo = impl_->onnx.memoryInfo();
@@ -99,6 +102,11 @@ std::array<float, STYLE_DIM> StyleEncoderOnnx::encode(const std::vector<Skeleton
     // Output: [1, 64]
     const float* embData = outputs[0].GetTensorData<float>();
     std::copy_n(embData, STYLE_DIM, embedding.begin());
+#else
+    (void)inputData;
+    HM_LOG_WARN(TAG, "ONNX Runtime not available, returning zero embedding");
+    return embedding;
+#endif
 
     // L2 normalize
     float norm = 0.0f;
@@ -117,9 +125,38 @@ std::array<float, STYLE_DIM> StyleEncoderOnnx::encode(const std::vector<Skeleton
 
 #ifdef HM_HAS_TORCH
 
-// -----------------------------------------------------------------------
+// -------------------------------------------------------------------
+// ModelSummary::toString
+// -------------------------------------------------------------------
+
+std::string ModelSummary::toString() const {
+    std::ostringstream oss;
+    oss << "================================================================\n";
+    oss << std::left << std::setw(32) << "Layer (name)"
+        << std::setw(18) << "Type"
+        << std::right << std::setw(14) << "Params"
+        << std::setw(14) << "Trainable" << "\n";
+    oss << "----------------------------------------------------------------\n";
+
+    for (const auto& layer : layers) {
+        oss << std::left << std::setw(32) << layer.name
+            << std::setw(18) << layer.type
+            << std::right << std::setw(14) << layer.numParameters
+            << std::setw(14) << layer.numTrainable << "\n";
+    }
+
+    oss << "================================================================\n";
+    oss << "Total params: " << totalParameters << "\n";
+    oss << "Trainable params: " << trainableParameters << "\n";
+    oss << "Non-trainable params: " << nonTrainableParameters << "\n";
+    oss << "================================================================\n";
+
+    return oss.str();
+}
+
+// -------------------------------------------------------------------
 // ResBlock1D
-// -----------------------------------------------------------------------
+// -------------------------------------------------------------------
 
 ResBlock1DImpl::ResBlock1DImpl(int inChannels, int outChannels) {
     conv1_ = register_module("conv1", torch::nn::Conv1d(
@@ -144,11 +181,13 @@ torch::Tensor ResBlock1DImpl::forward(torch::Tensor x) {
     return torch::relu(h + residual);
 }
 
-// -----------------------------------------------------------------------
-// StyleEncoder (training)
-// -----------------------------------------------------------------------
+// -------------------------------------------------------------------
+// StyleEncoder (training) -- Construction
+// -------------------------------------------------------------------
 
-StyleEncoderImpl::StyleEncoderImpl(int inputDim, int styleDim) {
+StyleEncoderImpl::StyleEncoderImpl(int inputDim, int styleDim)
+    : inputDim_(inputDim), styleDim_(styleDim) {
+
     inputConv_ = register_module("input_conv", torch::nn::Conv1d(
         torch::nn::Conv1dOptions(inputDim, 128, 3).padding(1)));
     inputBN_ = register_module("input_bn", torch::nn::BatchNorm1d(128));
@@ -162,10 +201,23 @@ StyleEncoderImpl::StyleEncoderImpl(int inputDim, int styleDim) {
 
     fc1_ = register_module("fc1", torch::nn::Linear(512, 256));
     fc2_ = register_module("fc2", torch::nn::Linear(256, styleDim));
+
+    // Apply default Kaiming initialization
+    initializeWeights(WeightInitStrategy::KaimingNormal);
 }
+
+// -------------------------------------------------------------------
+// Forward pass
+// -------------------------------------------------------------------
 
 torch::Tensor StyleEncoderImpl::forward(torch::Tensor x) {
     // x: [B, inputDim, T]
+
+    // Optional input normalization
+    if (hasInputNorm_) {
+        x = normalizeInput(x);
+    }
+
     auto h = torch::relu(inputBN_->forward(inputConv_->forward(x)));
 
     for (const auto& block : *resBlocks_) {
@@ -184,6 +236,430 @@ torch::Tensor StyleEncoderImpl::forward(torch::Tensor x) {
 
     return h;  // [B, styleDim]
 }
+
+// -------------------------------------------------------------------
+// Forward with intermediate feature extraction
+// -------------------------------------------------------------------
+
+torch::Tensor StyleEncoderImpl::forwardWithIntermediates(
+    torch::Tensor x, IntermediateFeatures& features) {
+    // x: [B, inputDim, T]
+
+    // Optional input normalization
+    if (hasInputNorm_) {
+        x = normalizeInput(x);
+    }
+
+    // Input conv + BN + ReLU
+    auto h = torch::relu(inputBN_->forward(inputConv_->forward(x)));
+    features.afterInputConv = h.detach().clone();
+
+    // ResBlocks
+    h = resBlocks_[0]->as<ResBlock1DImpl>()->forward(h);
+    features.afterResBlock0 = h.detach().clone();
+
+    h = resBlocks_[1]->as<ResBlock1DImpl>()->forward(h);
+    features.afterResBlock1 = h.detach().clone();
+
+    h = resBlocks_[2]->as<ResBlock1DImpl>()->forward(h);
+    features.afterResBlock2 = h.detach().clone();
+
+    h = resBlocks_[3]->as<ResBlock1DImpl>()->forward(h);
+    features.afterResBlock3 = h.detach().clone();
+
+    // Global Average Pooling
+    h = h.mean(/*dim=*/2);
+    features.afterGAP = h.detach().clone();
+
+    // FC layers
+    h = torch::relu(fc1_->forward(h));
+    features.afterFC1 = h.detach().clone();
+
+    h = fc2_->forward(h);
+
+    // L2 normalize
+    h = torch::nn::functional::normalize(h,
+        torch::nn::functional::NormalizeFuncOptions().p(2).dim(1));
+    features.finalEmbedding = h.detach().clone();
+
+    return h;
+}
+
+// -------------------------------------------------------------------
+// Weight initialization
+// -------------------------------------------------------------------
+
+static void initConvWeights(torch::nn::Conv1d& conv, WeightInitStrategy strategy) {
+    if (!conv.get()) return;
+    switch (strategy) {
+        case WeightInitStrategy::KaimingNormal:
+            torch::nn::init::kaiming_normal_(
+                conv->weight,
+                /*a=*/0.0,
+                torch::kFanOut,
+                torch::kReLU);
+            break;
+        case WeightInitStrategy::KaimingUniform:
+            torch::nn::init::kaiming_uniform_(
+                conv->weight,
+                /*a=*/0.0,
+                torch::kFanOut);
+            break;
+        case WeightInitStrategy::XavierNormal:
+            torch::nn::init::xavier_normal_(conv->weight);
+            break;
+        case WeightInitStrategy::XavierUniform:
+            torch::nn::init::xavier_uniform_(conv->weight);
+            break;
+        case WeightInitStrategy::Default:
+            // Do nothing; use PyTorch default
+            break;
+    }
+    if (conv->bias.defined()) {
+        torch::nn::init::zeros_(conv->bias);
+    }
+}
+
+static void initLinearWeights(torch::nn::Linear& linear, WeightInitStrategy strategy) {
+    if (!linear.get()) return;
+    switch (strategy) {
+        case WeightInitStrategy::KaimingNormal:
+            // For linear layers after ReLU, Kaiming is appropriate
+            torch::nn::init::kaiming_normal_(
+                linear->weight,
+                /*a=*/0.0,
+                torch::kFanOut,
+                torch::kReLU);
+            break;
+        case WeightInitStrategy::KaimingUniform:
+            torch::nn::init::kaiming_uniform_(
+                linear->weight,
+                /*a=*/0.0,
+                torch::kFanOut);
+            break;
+        case WeightInitStrategy::XavierNormal:
+            torch::nn::init::xavier_normal_(linear->weight);
+            break;
+        case WeightInitStrategy::XavierUniform:
+            torch::nn::init::xavier_uniform_(linear->weight);
+            break;
+        case WeightInitStrategy::Default:
+            break;
+    }
+    if (linear->bias.defined()) {
+        torch::nn::init::zeros_(linear->bias);
+    }
+}
+
+static void initBatchNormWeights(torch::nn::BatchNorm1d& bn) {
+    if (!bn.get()) return;
+    if (bn->weight.defined()) {
+        torch::nn::init::ones_(bn->weight);
+    }
+    if (bn->bias.defined()) {
+        torch::nn::init::zeros_(bn->bias);
+    }
+}
+
+void StyleEncoderImpl::initializeWeights(WeightInitStrategy strategy) {
+    if (strategy == WeightInitStrategy::Default) {
+        HM_LOG_DEBUG(TAG, "Using default PyTorch initialization (no explicit init)");
+        return;
+    }
+
+    HM_LOG_DEBUG(TAG, "Initializing weights with strategy: " +
+                 std::to_string(static_cast<int>(strategy)));
+
+    torch::NoGradGuard noGrad;
+
+    // Input conv + BN
+    initConvWeights(inputConv_, strategy);
+    initBatchNormWeights(inputBN_);
+
+    // ResBlocks: iterate through each block's sub-modules
+    for (const auto& block : *resBlocks_) {
+        auto* resBlock = block->as<ResBlock1DImpl>();
+        // Access named parameters to initialize the conv layers inside ResBlocks
+        for (auto& pair : resBlock->named_modules(/*memo=*/std::string{}, /*include_self=*/false)) {
+            const auto& name = pair.key();
+            auto& mod = pair.value();
+
+            // Try Conv1d
+            auto conv1d = std::dynamic_pointer_cast<torch::nn::Conv1dImpl>(mod);
+            if (conv1d) {
+                switch (strategy) {
+                    case WeightInitStrategy::KaimingNormal:
+                        torch::nn::init::kaiming_normal_(conv1d->weight, 0.0, torch::kFanOut, torch::kReLU);
+                        break;
+                    case WeightInitStrategy::KaimingUniform:
+                        torch::nn::init::kaiming_uniform_(conv1d->weight, 0.0, torch::kFanOut);
+                        break;
+                    case WeightInitStrategy::XavierNormal:
+                        torch::nn::init::xavier_normal_(conv1d->weight);
+                        break;
+                    case WeightInitStrategy::XavierUniform:
+                        torch::nn::init::xavier_uniform_(conv1d->weight);
+                        break;
+                    default:
+                        break;
+                }
+                if (conv1d->bias.defined()) {
+                    torch::nn::init::zeros_(conv1d->bias);
+                }
+                continue;
+            }
+
+            // Try BatchNorm1d
+            auto bn1d = std::dynamic_pointer_cast<torch::nn::BatchNorm1dImpl>(mod);
+            if (bn1d) {
+                if (bn1d->weight.defined()) torch::nn::init::ones_(bn1d->weight);
+                if (bn1d->bias.defined()) torch::nn::init::zeros_(bn1d->bias);
+                continue;
+            }
+        }
+    }
+
+    // FC layers: use Xavier for the final projection since it feeds into L2 norm,
+    // but Kaiming for fc1 which is followed by ReLU
+    initLinearWeights(fc1_, strategy);
+
+    // Final layer (fc2) benefits from Xavier since its output is L2-normalized
+    // rather than fed through ReLU
+    WeightInitStrategy finalStrategy = strategy;
+    if (strategy == WeightInitStrategy::KaimingNormal) {
+        finalStrategy = WeightInitStrategy::XavierNormal;
+    } else if (strategy == WeightInitStrategy::KaimingUniform) {
+        finalStrategy = WeightInitStrategy::XavierUniform;
+    }
+    initLinearWeights(fc2_, finalStrategy);
+
+    HM_LOG_INFO(TAG, "Weight initialization complete. Total params: " +
+                std::to_string(countTotalParameters()));
+}
+
+// -------------------------------------------------------------------
+// Inference mode
+// -------------------------------------------------------------------
+
+void StyleEncoderImpl::setInferenceMode(bool enabled) {
+    inferenceMode_ = enabled;
+    if (enabled) {
+        this->eval();
+        // Freeze all parameters for inference
+        for (auto& param : this->parameters()) {
+            param.set_requires_grad(false);
+        }
+        HM_LOG_DEBUG(TAG, "Inference mode enabled (eval + params frozen)");
+    } else {
+        this->train();
+        // Unfreeze all parameters for training
+        for (auto& param : this->parameters()) {
+            param.set_requires_grad(true);
+        }
+        HM_LOG_DEBUG(TAG, "Training mode restored (train + params unfrozen)");
+    }
+}
+
+// -------------------------------------------------------------------
+// Model summary and parameter counting
+// -------------------------------------------------------------------
+
+int64_t StyleEncoderImpl::countTrainableParameters() const {
+    int64_t count = 0;
+    for (const auto& param : this->parameters()) {
+        if (param.requires_grad()) {
+            count += param.numel();
+        }
+    }
+    return count;
+}
+
+int64_t StyleEncoderImpl::countTotalParameters() const {
+    int64_t count = 0;
+    for (const auto& param : this->parameters()) {
+        count += param.numel();
+    }
+    return count;
+}
+
+ModelSummary StyleEncoderImpl::summary() const {
+    ModelSummary result;
+
+    for (const auto& pair : this->named_modules(/*memo=*/std::string{}, /*include_self=*/false)) {
+        const auto& name = pair.key();
+        auto& mod = pair.value();
+
+        LayerSummary layer;
+        layer.name = name;
+
+        // Determine type string
+        auto conv1d = std::dynamic_pointer_cast<torch::nn::Conv1dImpl>(mod);
+        auto bn1d = std::dynamic_pointer_cast<torch::nn::BatchNorm1dImpl>(mod);
+        auto linear = std::dynamic_pointer_cast<torch::nn::LinearImpl>(mod);
+
+        if (conv1d) {
+            layer.type = "Conv1d";
+        } else if (bn1d) {
+            layer.type = "BatchNorm1d";
+        } else if (linear) {
+            layer.type = "Linear";
+        } else {
+            layer.type = "Module";
+        }
+
+        // Count parameters in this module (direct, not recursive)
+        int64_t numParams = 0;
+        int64_t numTrainable = 0;
+        for (const auto& p : mod->parameters(/*recurse=*/false)) {
+            numParams += p.numel();
+            if (p.requires_grad()) {
+                numTrainable += p.numel();
+            }
+        }
+        // Also count buffers (e.g., running_mean, running_var in BN)
+        for (const auto& b : mod->buffers(/*recurse=*/false)) {
+            numParams += b.numel();
+        }
+
+        layer.numParameters = numParams;
+        layer.numTrainable = numTrainable;
+
+        // Only add leaf modules with parameters (skip container wrappers)
+        if (numParams > 0) {
+            result.layers.push_back(layer);
+        }
+    }
+
+    // Compute totals
+    result.totalParameters = countTotalParameters();
+    result.trainableParameters = countTrainableParameters();
+    result.nonTrainableParameters = result.totalParameters - result.trainableParameters;
+
+    // Add non-parameter buffers to total (BN running stats etc.)
+    for (const auto& b : this->buffers()) {
+        result.totalParameters += b.numel();
+    }
+    result.nonTrainableParameters = result.totalParameters - result.trainableParameters;
+
+    return result;
+}
+
+void StyleEncoderImpl::printSummary() const {
+    auto s = summary();
+    HM_LOG_INFO(TAG, "\n" + s.toString());
+}
+
+// -------------------------------------------------------------------
+// Input normalization
+// -------------------------------------------------------------------
+
+void StyleEncoderImpl::computeInputNormalization(
+    const std::vector<torch::Tensor>& samples,
+    int maxBatches) {
+
+    if (samples.empty()) {
+        HM_LOG_WARN(TAG, "No samples provided for input normalization");
+        return;
+    }
+
+    HM_LOG_INFO(TAG, "Computing input normalization statistics from " +
+                std::to_string(samples.size()) + " samples");
+
+    torch::NoGradGuard noGrad;
+
+    // Welford's online algorithm for numerically stable mean/variance
+    auto runningMean = torch::zeros({inputDim_});
+    auto runningM2 = torch::zeros({inputDim_});
+    int64_t totalFrames = 0;
+
+    int batchCount = 0;
+    for (const auto& sample : samples) {
+        if (maxBatches > 0 && batchCount >= maxBatches) break;
+
+        // sample: [B, inputDim, T] or [inputDim, T]
+        torch::Tensor data;
+        if (sample.dim() == 3) {
+            // [B, inputDim, T] -> [inputDim, B*T]
+            data = sample.permute({1, 0, 2}).reshape({inputDim_, -1});
+        } else if (sample.dim() == 2) {
+            // [inputDim, T] -> already fine
+            data = sample;
+        } else {
+            continue;
+        }
+
+        int64_t numFrames = data.size(1);
+        for (int64_t f = 0; f < numFrames; ++f) {
+            totalFrames++;
+            auto frame = data.select(1, f);  // [inputDim]
+            auto delta = frame - runningMean;
+            runningMean += delta / static_cast<float>(totalFrames);
+            auto delta2 = frame - runningMean;
+            runningM2 += delta * delta2;
+        }
+
+        batchCount++;
+    }
+
+    if (totalFrames < 2) {
+        HM_LOG_WARN(TAG, "Insufficient data for normalization (need >= 2 frames)");
+        return;
+    }
+
+    auto variance = runningM2 / static_cast<float>(totalFrames - 1);
+    auto stddev = torch::sqrt(variance + 1e-8f);
+
+    inputMean_ = runningMean;
+    inputStd_ = stddev;
+    hasInputNorm_ = true;
+
+    HM_LOG_INFO(TAG, "Input normalization computed from " +
+                std::to_string(totalFrames) + " frames across " +
+                std::to_string(batchCount) + " batches");
+
+    // Log some statistics
+    HM_LOG_DEBUG(TAG, "Mean range: [" +
+                 std::to_string(inputMean_.min().item<float>()) + ", " +
+                 std::to_string(inputMean_.max().item<float>()) + "]");
+    HM_LOG_DEBUG(TAG, "Std range: [" +
+                 std::to_string(inputStd_.min().item<float>()) + ", " +
+                 std::to_string(inputStd_.max().item<float>()) + "]");
+}
+
+torch::Tensor StyleEncoderImpl::normalizeInput(torch::Tensor x) const {
+    if (!hasInputNorm_) {
+        return x;
+    }
+
+    // x: [B, inputDim, T]
+    // inputMean_ and inputStd_: [inputDim]
+    // Reshape for broadcasting: [1, inputDim, 1]
+    auto mean = inputMean_.unsqueeze(0).unsqueeze(2).to(x.device());
+    auto std = inputStd_.unsqueeze(0).unsqueeze(2).to(x.device());
+
+    return (x - mean) / std;
+}
+
+std::pair<std::vector<float>, std::vector<float>>
+StyleEncoderImpl::getInputNormStats() const {
+    std::vector<float> mean(inputDim_, 0.0f);
+    std::vector<float> std(inputDim_, 1.0f);
+
+    if (hasInputNorm_) {
+        auto meanAcc = inputMean_.accessor<float, 1>();
+        auto stdAcc = inputStd_.accessor<float, 1>();
+        for (int i = 0; i < inputDim_; ++i) {
+            mean[i] = meanAcc[i];
+            std[i] = stdAcc[i];
+        }
+    }
+
+    return {mean, std};
+}
+
+// -------------------------------------------------------------------
+// prepareInput (static utility)
+// -------------------------------------------------------------------
 
 torch::Tensor StyleEncoderImpl::prepareInput(const std::vector<SkeletonFrame>& frames) {
     int numFrames = static_cast<int>(frames.size());

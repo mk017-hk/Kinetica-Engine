@@ -126,7 +126,7 @@ install(TARGETS hm_studio RUNTIME DESTINATION bin)
 set(CPACK_PACKAGE_NAME "HyperMotion-Studio")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR "HyperMotion")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Motion Capture & Animation System for UE5 Football Games")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Video-to-Animation Pipeline Studio")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "HyperMotion Studio")
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/../LICENSE")

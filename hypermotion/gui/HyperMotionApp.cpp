@@ -734,7 +734,7 @@ void HyperMotionApp::renderAboutPopup() {
     ImGui::Text("HyperMotion Studio v1.0.0");
     ImGui::Separator();
     ImGui::Text("Full Motion Capture & Animation System");
-    ImGui::Text("for UE5 Football Games");
+    ImGui::Text("Video-to-Animation Pipeline");
     ImGui::Spacing();
     ImGui::Text("Modules:");
     ImGui::BulletText("Multi-Person Pose Estimation (YOLOv8 + HRNet)");
@@ -743,7 +743,7 @@ void HyperMotionApp::renderAboutPopup() {
     ImGui::BulletText("Motion Segmentation (TCN)");
     ImGui::BulletText("ML Animation Generation (Diffusion)");
     ImGui::BulletText("Player Style Fingerprinting");
-    ImGui::BulletText("UE5 Runtime Plugin");
+    ImGui::BulletText("BVH/JSON Export Pipeline");
     ImGui::BulletText("BVH/JSON Export");
 
     if (ImGui::Button("Close")) {

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake g++ \
+            libopencv-dev \
+            libeigen3-dev
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S hypermotion \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DHM_BUILD_TESTS=ON \
+            -DHM_BUILD_TOOLS=ON \
+            -DHM_DEMO_MODE=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run tests
+        run: ./build/bin/hm_tests
+
+      - name: Run demo
+        run: |
+          mkdir -p /tmp/ci_demo_output
+          ./build/bin/hm_demo --output /tmp/ci_demo_output
+          test -f /tmp/ci_demo_output/demo_clip.json
+          test -f /tmp/ci_demo_output/demo_clip.bvh

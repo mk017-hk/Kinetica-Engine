@@ -286,10 +286,31 @@ void MathUtils::inverseKinematics(
 
     outRootPos = worldPositions[0]; // Hips position
 
-    // Compute root rotation from hip-to-spine direction
+    // Compute root rotation using two direction vectors for full 3-DOF constraint:
+    // 1. Spine direction (primary axis)
+    // 2. Hip left-to-right direction (constrains twist around spine axis)
     Vec3 spineDir = (worldPositions[static_cast<int>(Joint::Spine)] - worldPositions[0]).normalized();
     Vec3 restSpineDir = offsets[static_cast<int>(Joint::Spine)].normalized();
-    outRootRot = rotationBetween(restSpineDir, spineDir);
+
+    Vec3 restHipVec = offsets[static_cast<int>(Joint::RightUpLeg)] - offsets[static_cast<int>(Joint::LeftUpLeg)];
+    Vec3 worldHipVec = (worldPositions[static_cast<int>(Joint::RightUpLeg)] -
+                        worldPositions[static_cast<int>(Joint::LeftUpLeg)]);
+
+    // Build orthonormal rest frame via Gram-Schmidt
+    Vec3 ry = restSpineDir;
+    Vec3 rx = (restHipVec - ry * ry.dot(restHipVec)).normalized();
+    Vec3 rz = rx.cross(ry).normalized();
+
+    // Build orthonormal world frame via Gram-Schmidt
+    Vec3 wy = spineDir;
+    Vec3 wx = (worldHipVec - wy * wy.dot(worldHipVec)).normalized();
+    Vec3 wz = wx.cross(wy).normalized();
+
+    // R = worldFrame * restFrame^T
+    Mat3 restFrame, worldFrame;
+    restFrame.setCol(0, rx); restFrame.setCol(1, ry); restFrame.setCol(2, rz);
+    worldFrame.setCol(0, wx); worldFrame.setCol(1, wy); worldFrame.setCol(2, wz);
+    outRootRot = mat3ToQuat(worldFrame * restFrame.transposed()).normalized();
 
     // Compute world rotations for each joint
     std::array<Quat, JOINT_COUNT> worldRot;

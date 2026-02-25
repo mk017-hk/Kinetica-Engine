@@ -12,8 +12,16 @@ include(FetchContent)
 option(HM_BUILD_TOOLS "Build CLI tools" ON)
 option(HM_BUILD_GUI "Build GUI application (requires GLFW + Dear ImGui)" OFF)
 option(HM_BUILD_TESTS "Build tests" OFF)
-option(HM_USE_TENSORRT "Enable TensorRT backend" OFF)
-option(HM_USE_CUDA "Enable CUDA support" OFF)
+option(HM_DEMO_MODE "Build demo tool (no ML models required)" ON)
+
+# GPU / ML feature flags (all OFF by default for CPU-only builds)
+option(HM_ENABLE_CUDA "Enable CUDA acceleration" OFF)
+option(HM_ENABLE_TENSORRT "Enable TensorRT backend" OFF)
+option(HM_ENABLE_LIBTORCH "Enable LibTorch for training modules" OFF)
+
+# Legacy aliases
+set(HM_USE_TENSORRT ${HM_ENABLE_TENSORRT})
+set(HM_USE_CUDA ${HM_ENABLE_CUDA})
 
 # -------------------------------------------------------------------
 # Dependencies — try system packages first, fall back to FetchContent
@@ -110,14 +118,19 @@ endif()
 
 # LibTorch (C++ PyTorch) — required for training (hm_train, hm_style),
 # optional for inference-only builds.
-find_package(Torch QUIET)
-if(Torch_FOUND)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
-    set(HM_HAS_TORCH TRUE)
-    message(STATUS "LibTorch found — training modules enabled")
+if(HM_ENABLE_LIBTORCH)
+    find_package(Torch QUIET)
+    if(Torch_FOUND)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+        set(HM_HAS_TORCH TRUE)
+        message(STATUS "LibTorch found — training modules enabled")
+    else()
+        message(STATUS "LibTorch requested but not found — training tools will not have ML support")
+        set(HM_HAS_TORCH FALSE)
+    endif()
 else()
-    message(STATUS "LibTorch not found — training tools (hm_train, hm_style) will not have ML support")
     set(HM_HAS_TORCH FALSE)
+    message(STATUS "LibTorch disabled (HM_ENABLE_LIBTORCH=OFF)")
 endif()
 
 # ONNX Runtime — optional
@@ -308,6 +321,16 @@ if(HM_BUILD_TOOLS)
 endif()
 
 # -------------------------------------------------------------------
+# Demo Tool (always buildable — no ML models required)
+# -------------------------------------------------------------------
+
+if(HM_DEMO_MODE)
+    add_executable(hm_demo tools/hm_demo.cpp)
+    target_link_libraries(hm_demo PRIVATE hypermotion)
+    target_compile_definitions(hm_demo PRIVATE HM_DEMO_MODE=1)
+endif()
+
+# -------------------------------------------------------------------
 # GUI Application (Dear ImGui + GLFW + OpenGL)
 # Self-contained in gui/ — has its own CMakeLists.txt, resources,
 # build scripts, and CPack packaging config.
@@ -330,6 +353,10 @@ install(DIRECTORY ${HM_INCLUDE_DIR}/HyperMotion DESTINATION include)
 if(HM_BUILD_TOOLS)
     install(TARGETS hm_extract hm_train hm_style hm_batch
         RUNTIME DESTINATION bin)
+endif()
+
+if(HM_DEMO_MODE)
+    install(TARGETS hm_demo RUNTIME DESTINATION bin)
 endif()
 
 # -------------------------------------------------------------------

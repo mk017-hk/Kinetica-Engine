@@ -123,6 +123,17 @@ std::string JSONExporter::exportToString(const AnimClip& clip) {
 bool JSONExporter::exportToFile(const AnimClip& clip, const std::string& path) {
     std::string content = exportToString(clip);
 
+    // Ensure parent directory exists
+    std::filesystem::path filePath(path);
+    if (filePath.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(filePath.parent_path(), ec);
+        if (ec) {
+            HM_LOG_ERROR(TAG, "Cannot create directory: " + filePath.parent_path().string());
+            return false;
+        }
+    }
+
     std::ofstream ofs(path);
     if (!ofs.is_open()) {
         HM_LOG_ERROR(TAG, "Cannot open file: " + path);

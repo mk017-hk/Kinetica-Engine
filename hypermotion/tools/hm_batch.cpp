@@ -1,5 +1,6 @@
 #include "HyperMotion/Pipeline.h"
 #include "HyperMotion/core/Logger.h"
+#include "HyperMotion/core/PipelineConfigIO.h"
 
 #include <iostream>
 #include <string>
@@ -8,23 +9,27 @@
 #include <algorithm>
 
 struct BatchArgs {
+    std::string configFile;
     std::string detectorModel;
     std::string poseModel;
     std::string inputDir;
-    std::string outputDir = "batch_output";
-    float fps = 30.0f;
-    std::string format = "json";
+    std::string outputDir;
+    float fps = -1.0f;
+    std::string format;
     std::string depthModel;
     std::string segmenterModel;
     bool split = false;
+    bool splitSet = false;
     int maxVideos = -1;
+    std::string statsOutput;
 };
 
 static void printUsage() {
     std::cout << "Usage: hm_batch [options]\n"
               << "Options:\n"
-              << "  --detector <path>    YOLOv8 ONNX model path (required)\n"
-              << "  --pose <path>        HRNet ONNX model path (required)\n"
+              << "  --config <path>      Pipeline config JSON (use hm_config to generate)\n"
+              << "  --detector <path>    YOLOv8 ONNX model path\n"
+              << "  --pose <path>        HRNet ONNX model path\n"
               << "  --input <dir>        Input directory with video files (required)\n"
               << "  --output <dir>       Output directory (default: batch_output)\n"
               << "  --fps <value>        Target FPS (default: 30)\n"
@@ -33,14 +38,18 @@ static void printUsage() {
               << "  --segmenter <path>   TCN segmenter model path (optional)\n"
               << "  --split              Split clips by motion segment\n"
               << "  --max <n>            Max number of videos to process\n"
-              << "  --help               Show this help\n";
+              << "  --stats <path>       Write pipeline timing stats to JSON file\n"
+              << "  --help               Show this help\n"
+              << "\n"
+              << "CLI arguments override values from the config file.\n";
 }
 
 static BatchArgs parseArgs(int argc, char* argv[]) {
     BatchArgs args;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--detector" && i + 1 < argc) args.detectorModel = argv[++i];
+        if (arg == "--config" && i + 1 < argc) args.configFile = argv[++i];
+        else if (arg == "--detector" && i + 1 < argc) args.detectorModel = argv[++i];
         else if (arg == "--pose" && i + 1 < argc) args.poseModel = argv[++i];
         else if (arg == "--input" && i + 1 < argc) args.inputDir = argv[++i];
         else if (arg == "--output" && i + 1 < argc) args.outputDir = argv[++i];
@@ -48,8 +57,9 @@ static BatchArgs parseArgs(int argc, char* argv[]) {
         else if (arg == "--format" && i + 1 < argc) args.format = argv[++i];
         else if (arg == "--depth" && i + 1 < argc) args.depthModel = argv[++i];
         else if (arg == "--segmenter" && i + 1 < argc) args.segmenterModel = argv[++i];
-        else if (arg == "--split") args.split = true;
+        else if (arg == "--split") { args.split = true; args.splitSet = true; }
         else if (arg == "--max" && i + 1 < argc) args.maxVideos = std::stoi(argv[++i]);
+        else if (arg == "--stats" && i + 1 < argc) args.statsOutput = argv[++i];
         else if (arg == "--help") { printUsage(); std::exit(0); }
     }
     return args;
@@ -58,8 +68,8 @@ static BatchArgs parseArgs(int argc, char* argv[]) {
 int main(int argc, char* argv[]) {
     auto args = parseArgs(argc, argv);
 
-    if (args.detectorModel.empty() || args.poseModel.empty() || args.inputDir.empty()) {
-        std::cerr << "Error: --detector, --pose, and --input are required\n";
+    if (args.inputDir.empty()) {
+        std::cerr << "Error: --input is required\n";
         printUsage();
         return 1;
     }
@@ -92,16 +102,38 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Setup pipeline
+    // Setup pipeline: start from config file, overlay CLI overrides
     hm::PipelineConfig config;
-    config.poseConfig.detector.modelPath = args.detectorModel;
-    config.poseConfig.poseEstimator.modelPath = args.poseModel;
-    config.poseConfig.depthLifter.modelPath = args.depthModel;
-    config.poseConfig.targetFPS = args.fps;
-    config.segmenterConfig.modelPath = args.segmenterModel;
-    config.targetFPS = args.fps;
-    config.splitBySegment = args.split;
-    config.outputFormat = args.format;
+    if (!args.configFile.empty()) {
+        if (!hm::loadPipelineConfig(args.configFile, config)) {
+            std::cerr << "Failed to load config: " << args.configFile << "\n";
+            return 1;
+        }
+    }
+
+    if (!args.detectorModel.empty())
+        config.poseConfig.detector.modelPath = args.detectorModel;
+    if (!args.poseModel.empty())
+        config.poseConfig.poseEstimator.modelPath = args.poseModel;
+    if (!args.depthModel.empty())
+        config.poseConfig.depthLifter.modelPath = args.depthModel;
+    if (!args.segmenterModel.empty())
+        config.segmenterConfig.modelPath = args.segmenterModel;
+    if (args.fps > 0.0f) {
+        config.targetFPS = args.fps;
+        config.poseConfig.targetFPS = args.fps;
+    }
+    if (args.splitSet)
+        config.splitBySegment = args.split;
+    if (!args.format.empty())
+        config.outputFormat = args.format;
+    if (!args.outputDir.empty())
+        config.outputDirectory = args.outputDir;
+    else if (config.outputDirectory.empty())
+        config.outputDirectory = "batch_output";
+
+    // Use resolved output directory for batch
+    std::string batchOutputDir = config.outputDirectory;
 
     hm::Pipeline pipeline(config);
     if (!pipeline.initialize()) {
@@ -109,14 +141,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::filesystem::create_directories(args.outputDir);
+    std::filesystem::create_directories(batchOutputDir);
 
     int totalClips = 0;
     int processedVideos = 0;
 
     for (const auto& videoPath : videoFiles) {
         std::string videoName = std::filesystem::path(videoPath).stem().string();
-        std::string videoOutputDir = args.outputDir + "/" + videoName;
+        std::string videoOutputDir = batchOutputDir + "/" + videoName;
 
         std::cout << "\n[" << (processedVideos + 1) << "/" << videoFiles.size()
                   << "] Processing: " << videoPath << "\n";
@@ -140,7 +172,12 @@ int main(int argc, char* argv[]) {
     std::cout << "\nBatch processing complete.\n"
               << "  Videos processed: " << processedVideos << "\n"
               << "  Total clips: " << totalClips << "\n"
-              << "  Output directory: " << args.outputDir << "\n";
+              << "  Output directory: " << batchOutputDir << "\n";
+
+    if (!args.statsOutput.empty()) {
+        hm::savePipelineStats(args.statsOutput, pipeline.getLastStats());
+        std::cout << "Stats written to: " << args.statsOutput << "\n";
+    }
 
     return 0;
 }

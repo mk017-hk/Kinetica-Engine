@@ -214,6 +214,7 @@ set(HM_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(HM_CORE_SOURCES
     src/core/MathUtils.cpp
     src/core/Logger.cpp
+    src/core/PipelineConfigIO.cpp
 )
 
 set(HM_POSE_SOURCES
@@ -343,6 +344,9 @@ if(HM_BUILD_TOOLS)
 
     add_executable(hm_batch tools/hm_batch.cpp)
     target_link_libraries(hm_batch PRIVATE hypermotion)
+
+    add_executable(hm_config tools/hm_config.cpp)
+    target_link_libraries(hm_config PRIVATE hypermotion)
 endif()
 
 # -------------------------------------------------------------------
@@ -376,7 +380,7 @@ install(TARGETS hypermotion
 install(DIRECTORY ${HM_INCLUDE_DIR}/HyperMotion DESTINATION include)
 
 if(HM_BUILD_TOOLS)
-    install(TARGETS hm_extract hm_train hm_style hm_batch
+    install(TARGETS hm_extract hm_train hm_style hm_batch hm_config
         RUNTIME DESTINATION bin)
 endif()
 

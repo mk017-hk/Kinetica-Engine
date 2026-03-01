@@ -19,9 +19,18 @@ option(HM_ENABLE_CUDA "Enable CUDA acceleration" OFF)
 option(HM_ENABLE_TENSORRT "Enable TensorRT backend" OFF)
 option(HM_ENABLE_LIBTORCH "Enable LibTorch for training modules" OFF)
 
-# Legacy aliases
-set(HM_USE_TENSORRT ${HM_ENABLE_TENSORRT})
+# Accept legacy cache variables from older scripts.  If someone passes
+# -DHM_USE_CUDA=ON but did not set HM_ENABLE_CUDA, honour the legacy name.
+if(DEFINED HM_USE_CUDA AND NOT HM_ENABLE_CUDA)
+    set(HM_ENABLE_CUDA ${HM_USE_CUDA} CACHE BOOL "" FORCE)
+endif()
+if(DEFINED HM_USE_TENSORRT AND NOT HM_ENABLE_TENSORRT)
+    set(HM_ENABLE_TENSORRT ${HM_USE_TENSORRT} CACHE BOOL "" FORCE)
+endif()
+
+# Canonical → internal aliases (used in conditionals below)
 set(HM_USE_CUDA ${HM_ENABLE_CUDA})
+set(HM_USE_TENSORRT ${HM_ENABLE_TENSORRT})
 
 # -------------------------------------------------------------------
 # Dependencies — try system packages first, fall back to FetchContent
@@ -179,6 +188,22 @@ if(HM_USE_TENSORRT)
               "/usr/local/lib"
               "/usr/lib/x86_64-linux-gnu")
 endif()
+
+# -------------------------------------------------------------------
+# Configuration summary
+# -------------------------------------------------------------------
+
+message(STATUS "")
+message(STATUS "=== HyperMotion Build Configuration ===")
+message(STATUS "  CUDA acceleration : ${HM_ENABLE_CUDA}")
+message(STATUS "  TensorRT backend  : ${HM_ENABLE_TENSORRT}")
+message(STATUS "  LibTorch training : ${HM_ENABLE_LIBTORCH}")
+message(STATUS "  ONNX Runtime      : ${ONNXRUNTIME_INCLUDE_DIR}")
+message(STATUS "  Demo mode         : ${HM_DEMO_MODE}")
+message(STATUS "  GUI               : ${HM_BUILD_GUI}")
+message(STATUS "  Tests             : ${HM_BUILD_TESTS}")
+message(STATUS "========================================")
+message(STATUS "")
 
 # -------------------------------------------------------------------
 # Library: hypermotion

@@ -11,7 +11,7 @@
 #    ./build.sh                     # Build library + CLI tools
 #    ./build.sh --gui               # Also build GUI (HyperMotion Studio)
 #    ./build.sh --tests             # Also build and run tests
-#    HM_USE_CUDA=ON ./build.sh      # Enable CUDA
+#    HM_ENABLE_CUDA=ON ./build.sh    # Enable CUDA
 # ================================================================
 
 set -e
@@ -53,7 +53,7 @@ fi
 
 CMAKE_ARGS="-DHM_BUILD_TOOLS=ON -DHM_BUILD_GUI=${BUILD_GUI} -DHM_BUILD_TESTS=${BUILD_TESTS}"
 CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
-CMAKE_ARGS="${CMAKE_ARGS} -DHM_USE_CUDA=${HM_USE_CUDA:-OFF} -DHM_USE_TENSORRT=${HM_USE_TENSORRT:-OFF}"
+CMAKE_ARGS="${CMAKE_ARGS} -DHM_ENABLE_CUDA=${HM_ENABLE_CUDA:-OFF} -DHM_ENABLE_TENSORRT=${HM_ENABLE_TENSORRT:-OFF}"
 
 [ -n "$TORCH_DIR" ]        && CMAKE_ARGS="${CMAKE_ARGS} -DTorch_DIR=${TORCH_DIR}"
 [ -n "$ONNXRUNTIME_ROOT" ] && CMAKE_ARGS="${CMAKE_ARGS} -DONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}"

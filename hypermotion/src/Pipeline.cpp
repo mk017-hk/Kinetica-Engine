@@ -1,21 +1,14 @@
 #include "HyperMotion/Pipeline.h"
 #include "HyperMotion/core/Logger.h"
+#include "HyperMotion/core/ScopedTimer.h"
 
 #include <filesystem>
 #include <set>
-#include <chrono>
 #include <sstream>
 
 namespace hm {
 
 static constexpr const char* TAG = "Pipeline";
-
-using Clock = std::chrono::high_resolution_clock;
-
-static double elapsedMs(Clock::time_point start) {
-    auto end = Clock::now();
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
 
 struct Pipeline::Impl {
     PipelineConfig config;
@@ -84,9 +77,11 @@ std::vector<PoseFrameResult> Pipeline::extractPoses(
         if (callback) callback(pct * 0.5f, "Pose Extraction: " + msg);
     };
 
-    auto start = Clock::now();
-    auto result = impl_->poseEstimator.processVideo(videoPath, poseCB);
-    impl_->lastStats.poseExtractionMs = elapsedMs(start);
+    std::vector<PoseFrameResult> result;
+    {
+        ScopedTimer t(impl_->lastStats.poseExtractionMs);
+        result = impl_->poseEstimator.processVideo(videoPath, poseCB);
+    }
     impl_->lastStats.totalFramesProcessed = static_cast<int>(result.size());
 
     return result;
@@ -112,9 +107,13 @@ std::vector<AnimClip> Pipeline::buildClips(
 
     for (int id : trackingIDs) {
         // Step 1: Map COCO keypoints to skeleton
-        auto mapStart = Clock::now();
-        auto skeletonFrames = impl_->skeletonMapper.mapSequence(poseResults, id);
-        impl_->lastStats.skeletonMappingMs += elapsedMs(mapStart);
+        double mapMs = 0;
+        std::vector<SkeletonFrame> skeletonFrames;
+        {
+            ScopedTimer t(mapMs);
+            skeletonFrames = impl_->skeletonMapper.mapSequence(poseResults, id);
+        }
+        impl_->lastStats.skeletonMappingMs += mapMs;
 
         if (static_cast<int>(skeletonFrames.size()) < impl_->config.minTrackFrames) {
             HM_LOG_DEBUG(TAG, "Skipping track " + std::to_string(id) +
@@ -123,14 +122,21 @@ std::vector<AnimClip> Pipeline::buildClips(
         }
 
         // Step 2: Signal processing (smoothing, filtering)
-        auto signalStart = Clock::now();
-        impl_->signalPipeline.process(skeletonFrames);
-        impl_->lastStats.signalProcessingMs += elapsedMs(signalStart);
+        double sigMs = 0;
+        {
+            ScopedTimer t(sigMs);
+            impl_->signalPipeline.process(skeletonFrames);
+        }
+        impl_->lastStats.signalProcessingMs += sigMs;
 
         // Step 3: Motion segmentation
-        auto segStart = Clock::now();
-        auto segments = impl_->motionSegmenter.segment(skeletonFrames, id);
-        impl_->lastStats.segmentationMs += elapsedMs(segStart);
+        double segMs = 0;
+        std::vector<MotionSegment> segments;
+        {
+            ScopedTimer t(segMs);
+            segments = impl_->motionSegmenter.segment(skeletonFrames, id);
+        }
+        impl_->lastStats.segmentationMs += segMs;
         impl_->lastStats.segmentsFound += static_cast<int>(segments.size());
 
         // Build clip
@@ -166,7 +172,7 @@ std::vector<AnimClip> Pipeline::buildClips(
 void Pipeline::exportClips(const std::vector<AnimClip>& clips, const std::string& outputDir) {
     if (clips.empty()) return;
 
-    auto exportStart = Clock::now();
+    ScopedTimer exportTimer(impl_->lastStats.exportMs);
 
     std::filesystem::create_directories(outputDir);
 
@@ -181,8 +187,6 @@ void Pipeline::exportClips(const std::vector<AnimClip>& clips, const std::string
             impl_->bvhExporter.exportToFile(clip, basePath + ".bvh");
         }
     }
-
-    impl_->lastStats.exportMs = elapsedMs(exportStart);
     HM_LOG_INFO(TAG, "Exported " + std::to_string(clips.size()) + " clips to: " + outputDir);
 }
 
@@ -191,7 +195,7 @@ std::vector<AnimClip> Pipeline::processVideo(
 
     // Reset stats
     impl_->lastStats = PipelineStats{};
-    auto totalStart = Clock::now();
+    ScopedTimer totalTimer(impl_->lastStats.totalMs);
 
     // Step 1: Extract poses (0-50%)
     auto poseResults = extractPoses(videoPath, callback);
@@ -208,9 +212,7 @@ std::vector<AnimClip> Pipeline::processVideo(
         exportClips(clips, impl_->config.outputDirectory);
     }
 
-    impl_->lastStats.totalMs = elapsedMs(totalStart);
-
-    // Log summary stats
+    // Log summary stats (totalMs is written by totalTimer destructor after return)
     std::ostringstream ss;
     ss << "Pipeline complete: "
        << impl_->lastStats.totalFramesProcessed << " frames, "
@@ -222,7 +224,7 @@ std::vector<AnimClip> Pipeline::processVideo(
        << "signal=" << static_cast<int>(impl_->lastStats.signalProcessingMs) << "ms, "
        << "segment=" << static_cast<int>(impl_->lastStats.segmentationMs) << "ms, "
        << "export=" << static_cast<int>(impl_->lastStats.exportMs) << "ms, "
-       << "total=" << static_cast<int>(impl_->lastStats.totalMs) << "ms";
+       << "elapsed=" << static_cast<int>(totalTimer.elapsedMs()) << "ms";
     HM_LOG_INFO(TAG, ss.str());
 
     if (callback) callback(100.0f, "Complete");

@@ -411,6 +411,7 @@ if(HM_BUILD_TESTS)
         tests/test_export.cpp
         tests/test_noise_scheduler.cpp
         tests/test_skeleton.cpp
+        tests/test_config.cpp
     )
     target_link_libraries(hm_tests PRIVATE hypermotion GTest::gtest_main)
     target_include_directories(hm_tests PRIVATE ${HM_INCLUDE_DIR})

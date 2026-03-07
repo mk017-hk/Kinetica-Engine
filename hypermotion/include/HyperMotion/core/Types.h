@@ -470,4 +470,62 @@ inline const std::array<Vec3, JOINT_COUNT>& getRestPoseBoneOffsets() {
     return offsets;
 }
 
+// -------------------------------------------------------------------
+// FrameData — decoded video frame reference
+// -------------------------------------------------------------------
+
+struct FrameData {
+    int frameIndex = 0;
+    double timestamp = 0.0;
+    int width = 0;
+    int height = 0;
+    // Raw pixel data is typically held externally (cv::Mat).
+    // This struct carries metadata; callers pass the cv::Mat separately.
+};
+
+// -------------------------------------------------------------------
+// Pose2D / Pose3D — convenience wrappers
+// -------------------------------------------------------------------
+
+struct Pose2D {
+    std::array<Vec2, COCO_KEYPOINTS> joints{};
+    std::array<float, COCO_KEYPOINTS> confidence{};
+
+    float avgConfidence() const {
+        float sum = 0.0f;
+        for (auto c : confidence) sum += c;
+        return sum / static_cast<float>(COCO_KEYPOINTS);
+    }
+};
+
+struct Pose3D {
+    std::array<Vec3, COCO_KEYPOINTS> joints{};
+    std::array<float, COCO_KEYPOINTS> confidence{};
+
+    float avgConfidence() const {
+        float sum = 0.0f;
+        for (auto c : confidence) sum += c;
+        return sum / static_cast<float>(COCO_KEYPOINTS);
+    }
+};
+
+// -------------------------------------------------------------------
+// TrackedPlayer — standalone tracked player representation
+// -------------------------------------------------------------------
+
+struct TrackedPlayer {
+    int playerID = -1;
+    int trackletID = -1;
+    BBox bbox;
+    Pose2D pose2D;
+    Pose3D pose3D;
+    float confidence = 0.0f;
+    std::string classLabel;
+    std::vector<Vec3> trajectoryHistory;
+    std::vector<float> confidenceHistory;
+    int firstFrame = -1;
+    int lastFrame = -1;
+    int totalFrames = 0;
+};
+
 } // namespace hm

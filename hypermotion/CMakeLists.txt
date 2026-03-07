@@ -234,6 +234,7 @@ set(HM_POSE_SOURCES
     src/pose/MultiPersonPoseEstimator.cpp
     src/pose/PoseEstimator.cpp
     src/pose/PoseBatchProcessor.cpp
+    src/pose/PoseLifter.cpp
 )
 
 set(HM_SKELETON_SOURCES
@@ -462,6 +463,11 @@ if(HM_BUILD_TESTS)
         tests/test_noise_scheduler.cpp
         tests/test_skeleton.cpp
         tests/test_config.cpp
+        tests/test_tracking.cpp
+        tests/test_canonical_motion.cpp
+        tests/test_segmentation.cpp
+        tests/test_clip_quality.cpp
+        tests/test_fingerprint.cpp
     )
     target_link_libraries(hm_tests PRIVATE hypermotion GTest::gtest_main)
     target_include_directories(hm_tests PRIVATE ${HM_INCLUDE_DIR})

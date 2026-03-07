@@ -8,6 +8,9 @@
 #include "HyperMotion/export/BVHExporter.h"
 #include "HyperMotion/export/JSONExporter.h"
 #include "HyperMotion/export/AnimClipUtils.h"
+#include "HyperMotion/motion/FootContactDetector.h"
+#include "HyperMotion/motion/TrajectoryExtractor.h"
+#include "HyperMotion/dataset/MotionClusterer.h"
 
 #include <string>
 #include <vector>
@@ -23,6 +26,13 @@ struct PipelineConfig {
     segmenter::MotionSegmenterConfig segmenterConfig;
     xport::BVHExportConfig bvhConfig;
     xport::JSONExportConfig jsonConfig;
+    motion::FootContactDetectorConfig footContactConfig;
+    motion::TrajectoryExtractorConfig trajectoryConfig;
+    dataset::MotionClustererConfig clusterConfig;
+
+    bool enableFootContactDetection = true;
+    bool enableTrajectoryExtraction = true;
+    bool enableMotionClustering = true;
 
     float targetFPS = 30.0f;
     bool enableVisualization = false;
@@ -38,6 +48,9 @@ struct PipelineStats {
     double skeletonMappingMs = 0.0;
     double signalProcessingMs = 0.0;
     double segmentationMs = 0.0;
+    double footContactMs = 0.0;
+    double trajectoryMs = 0.0;
+    double clusteringMs = 0.0;
     double exportMs = 0.0;
     double totalMs = 0.0;
     int totalFramesProcessed = 0;

@@ -1,6 +1,9 @@
 #include "HyperMotion/Pipeline.h"
 #include "HyperMotion/core/Logger.h"
 #include "HyperMotion/core/ScopedTimer.h"
+#include "HyperMotion/motion/FootContactDetector.h"
+#include "HyperMotion/motion/TrajectoryExtractor.h"
+#include "HyperMotion/dataset/MotionClusterer.h"
 
 #include <filesystem>
 #include <set>
@@ -18,6 +21,9 @@ struct Pipeline::Impl {
     segmenter::MotionSegmenter motionSegmenter;
     xport::BVHExporter bvhExporter;
     xport::JSONExporter jsonExporter;
+    motion::FootContactDetector footContactDetector;
+    motion::TrajectoryExtractor trajectoryExtractor;
+    dataset::MotionClusterer motionClusterer;
     bool initialized = false;
     PipelineStats lastStats;
 
@@ -28,7 +34,10 @@ struct Pipeline::Impl {
         , signalPipeline(cfg.signalConfig)
         , motionSegmenter(cfg.segmenterConfig)
         , bvhExporter(cfg.bvhConfig)
-        , jsonExporter(cfg.jsonConfig) {}
+        , jsonExporter(cfg.jsonConfig)
+        , footContactDetector(cfg.footContactConfig)
+        , trajectoryExtractor(cfg.trajectoryConfig)
+        , motionClusterer(cfg.clusterConfig) {}
 };
 
 Pipeline::Pipeline(const PipelineConfig& config)
@@ -147,6 +156,26 @@ std::vector<AnimClip> Pipeline::buildClips(
         clip.frames = std::move(skeletonFrames);
         clip.segments = std::move(segments);
 
+        // Step 4: Foot contact detection
+        if (impl_->config.enableFootContactDetection) {
+            double fcMs = 0;
+            {
+                ScopedTimer t(fcMs);
+                impl_->footContactDetector.process(clip);
+            }
+            impl_->lastStats.footContactMs += fcMs;
+        }
+
+        // Step 5: Trajectory extraction
+        if (impl_->config.enableTrajectoryExtraction) {
+            double trajMs = 0;
+            {
+                ScopedTimer t(trajMs);
+                impl_->trajectoryExtractor.process(clip);
+            }
+            impl_->lastStats.trajectoryMs += trajMs;
+        }
+
         clips.push_back(std::move(clip));
     }
 
@@ -162,6 +191,16 @@ std::vector<AnimClip> Pipeline::buildClips(
         if (!splitClips.empty()) {
             clips.insert(clips.end(), splitClips.begin(), splitClips.end());
         }
+    }
+
+    // Step 6: Motion clustering (across all clips)
+    if (impl_->config.enableMotionClustering && clips.size() > 1) {
+        double clusterMs = 0;
+        {
+            ScopedTimer t(clusterMs);
+            impl_->motionClusterer.process(clips);
+        }
+        impl_->lastStats.clusteringMs += clusterMs;
     }
 
     impl_->lastStats.clipsProduced = static_cast<int>(clips.size());
@@ -223,6 +262,9 @@ std::vector<AnimClip> Pipeline::processVideo(
        << "skeleton=" << static_cast<int>(impl_->lastStats.skeletonMappingMs) << "ms, "
        << "signal=" << static_cast<int>(impl_->lastStats.signalProcessingMs) << "ms, "
        << "segment=" << static_cast<int>(impl_->lastStats.segmentationMs) << "ms, "
+       << "footcontact=" << static_cast<int>(impl_->lastStats.footContactMs) << "ms, "
+       << "trajectory=" << static_cast<int>(impl_->lastStats.trajectoryMs) << "ms, "
+       << "clustering=" << static_cast<int>(impl_->lastStats.clusteringMs) << "ms, "
        << "export=" << static_cast<int>(impl_->lastStats.exportMs) << "ms, "
        << "elapsed=" << static_cast<int>(totalTimer.elapsedMs()) << "ms";
     HM_LOG_INFO(TAG, ss.str());

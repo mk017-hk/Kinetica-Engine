@@ -325,6 +325,28 @@ struct MotionSegment {
 };
 
 // -------------------------------------------------------------------
+// Foot Contact State (per-frame)
+// -------------------------------------------------------------------
+
+struct FootContact {
+    bool leftFootContact = false;
+    bool rightFootContact = false;
+    float leftBlend = 0.0f;   // 0 = airborne, 1 = fully planted
+    float rightBlend = 0.0f;
+};
+
+// -------------------------------------------------------------------
+// Trajectory Point (predicted future position)
+// -------------------------------------------------------------------
+
+struct TrajectoryPoint {
+    float deltaTime = 0.0f;   // seconds ahead from current frame
+    Vec3 position;             // predicted world position
+    Vec3 velocity;             // predicted velocity at this point
+    float facing = 0.0f;      // predicted facing angle (radians)
+};
+
+// -------------------------------------------------------------------
 // Animation Clip
 // -------------------------------------------------------------------
 
@@ -334,6 +356,15 @@ struct AnimClip {
     int trackingID = -1;
     std::vector<SkeletonFrame> frames;
     std::vector<MotionSegment> segments;
+
+    // Foot contact data (one entry per frame, parallel to frames[])
+    std::vector<FootContact> footContacts;
+
+    // Per-frame trajectory predictions (one vector of future points per frame)
+    std::vector<std::vector<TrajectoryPoint>> trajectories;
+
+    // Cluster label assigned by MotionClusterer (-1 = unassigned)
+    int clusterID = -1;
 };
 
 // -------------------------------------------------------------------

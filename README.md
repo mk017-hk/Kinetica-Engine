@@ -31,7 +31,9 @@ Video Input ──► Player Detection (YOLOv8) ──► Pose Estimation (HRNet
 | Pose Estimation | `hm::pose::` | Implemented | Multi-person detection, pose, tracking, depth lifting |
 | Skeleton Mapping | `hm::skeleton::` | Implemented | COCO→22-joint mapping, rotation solver, retargeting |
 | Signal Processing | `hm::signal::` | Implemented | Outlier, Savitzky-Golay, Butterworth, quaternion smoothing, foot contact |
+| Motion Analysis | `hm::motion::` | Implemented | Foot contact detection, trajectory extraction and prediction |
 | Motion Segmentation | `hm::segmenter::` | Implemented | Feature extraction, temporal classification, segment merging |
+| Motion Clustering | `hm::dataset::` | Implemented | K-means clustering of clips by motion features |
 | ML Generation | `hm::ml::` | In Progress | Diffusion-based motion synthesis (offline, requires trained models) |
 | Player Style | `hm::style::` | In Progress | Style fingerprinting and library (requires trained models) |
 | Export | `hm::xport::` | Implemented | BVH, JSON, clip utilities (sub-clip, resample, mirror, concatenate) |
@@ -102,6 +104,46 @@ Generates a synthetic 90-frame walking animation and exports `demo_clip.json` an
 ```bash
 cd build && ctest --output-on-failure
 ```
+
+## Motion Analysis Systems
+
+### Foot Contact Detection (`hm::motion::FootContactDetector`)
+
+Detects per-frame foot plant events using three signals:
+
+1. **Foot velocity** — computed via finite difference of the foot joint's world position. A foot moving below the velocity threshold (default 2 cm/s) is a candidate for contact.
+2. **Foot height** — the Y-coordinate of the foot joint relative to the ground plane. Must be below the height threshold (default 5 cm).
+3. **Temporal stability** — raw contact detections are filtered through a sliding window (default 3 frames). Contact is confirmed only when all frames in the window agree, eliminating single-frame noise.
+
+Output per frame: `left_foot_contact`, `right_foot_contact`, plus smooth blend values (0..1) for transition animation. Stored in `AnimClip::footContacts`.
+
+This improves animation quality by enabling foot-locking (IK correction to prevent foot sliding) and providing ground truth for locomotion state machines.
+
+### Trajectory Extraction (`hm::motion::TrajectoryExtractor`)
+
+For each frame of an animation clip, computes:
+
+- **Root velocity** — smoothed over a configurable window (default 5 frames) for noise reduction
+- **Direction of movement** — derived from the root rotation's forward vector
+- **Predicted future trajectory** — at t+0.5s, t+1.0s, and t+1.5s using constant-velocity extrapolation with turn rate
+
+Each trajectory point contains: predicted position, velocity, and facing angle. Stored in `AnimClip::trajectories` (one vector of `TrajectoryPoint` per frame).
+
+This data is essential for motion matching, where the runtime compares the desired future trajectory against the trajectory stored in each animation clip to find the best match.
+
+### Motion Clustering (`hm::dataset::MotionClusterer`)
+
+Automatically discovers animation categories by clustering clips based on motion features:
+
+- **Velocity** (average and peak)
+- **Turn rate** (degrees/second)
+- **Stride frequency** (estimated from foot vertical oscillation)
+- **Joint angles** (knee bend, hip rotation, arm swing averages)
+- **Vertical range** (root Y extent, distinguishes jumps from ground motion)
+
+Uses k-means with k-means++ initialization and feature normalisation. Each clip is assigned a cluster label (`cluster_01`, `cluster_02`, ...) stored in `AnimClip::clusterID`.
+
+Clustering enables automatic dataset organisation without manual labelling, and the discovered categories can be used to build motion matching databases, balance training data, or identify rare motion types.
 
 ## Demo Output
 

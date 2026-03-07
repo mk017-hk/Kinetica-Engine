@@ -273,12 +273,18 @@ set(HM_TRACKING_SOURCES
     src/tracking/MultiPlayerTracker.cpp
 )
 
+set(HM_MOTION_SOURCES
+    src/motion/FootContactDetector.cpp
+    src/motion/TrajectoryExtractor.cpp
+)
+
 set(HM_DATASET_SOURCES
     src/dataset/ClipExtractor.cpp
     src/dataset/ClipQualityFilter.cpp
     src/dataset/MotionClassifier.cpp
     src/dataset/AnimationDatabase.cpp
     src/dataset/MatchAnalyser.cpp
+    src/dataset/MotionClusterer.cpp
 )
 
 set(HM_PIPELINE_SOURCES
@@ -295,6 +301,7 @@ add_library(hypermotion STATIC
     ${HM_STYLE_SOURCES}
     ${HM_EXPORT_SOURCES}
     ${HM_TRACKING_SOURCES}
+    ${HM_MOTION_SOURCES}
     ${HM_DATASET_SOURCES}
     ${HM_PIPELINE_SOURCES}
 )

@@ -155,6 +155,7 @@ int AnimationDatabase::exportToDirectory(const std::string& rootDir,
 std::string AnimationDatabase::exportSummaryJSON() const {
     auto s = stats();
     nlohmann::json j;
+    j["schemaVersion"] = HM_SCHEMA_VERSION;
     j["totalClips"] = s.totalClips;
     j["totalFrames"] = s.totalFrames;
     j["totalDurationSec"] = s.totalDurationSec;

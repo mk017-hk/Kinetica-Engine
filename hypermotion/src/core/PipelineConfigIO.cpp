@@ -307,6 +307,11 @@ std::string serialisePipelineStats(const PipelineStats& stats) {
     j["skeletonMappingMs"] = stats.skeletonMappingMs;
     j["signalProcessingMs"] = stats.signalProcessingMs;
     j["segmentationMs"] = stats.segmentationMs;
+    j["footContactMs"] = stats.footContactMs;
+    j["trajectoryMs"] = stats.trajectoryMs;
+    j["canonicalMotionMs"] = stats.canonicalMotionMs;
+    j["fingerprintMs"] = stats.fingerprintMs;
+    j["clusteringMs"] = stats.clusteringMs;
     j["exportMs"] = stats.exportMs;
     j["totalMs"] = stats.totalMs;
     j["totalFramesProcessed"] = stats.totalFramesProcessed;

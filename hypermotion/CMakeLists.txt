@@ -469,6 +469,7 @@ if(HM_BUILD_TESTS)
         tests/test_clip_quality.cpp
         tests/test_fingerprint.cpp
         tests/test_integration.cpp
+        tests/test_hardening.cpp
     )
     target_link_libraries(hm_tests PRIVATE hypermotion GTest::gtest_main)
     target_include_directories(hm_tests PRIVATE ${HM_INCLUDE_DIR})

@@ -1,6 +1,6 @@
 # HyperMotion Roadmap
 
-## Phase 1: Core Pipeline (current)
+## Phase 1: Core Pipeline (complete)
 
 **Goal**: A buildable library with a working demo that produces real animation artifacts.
 
@@ -12,7 +12,14 @@
 | BVH export | Output file loads in Blender with correct hierarchy | Done |
 | JSON export | Output file passes schema validation (version, frames, joints) | Done |
 | Demo mode | `hm_demo` produces demo_clip.json and demo_clip.bvh in <10s | Done |
-| Unit tests | 60+ tests pass via `ctest` | Done |
+| Multi-player tracking | Hungarian assignment + ReID persistence across frames | Done |
+| Canonical motion builder | Limb stabilisation, root orientation, local-space conversion | Done |
+| Motion fingerprinting | 18D feature vectors, similarity search | Done |
+| Animation database | Structured export with BVH + JSON + metadata per clip | Done |
+| Motion clustering | K-means++ grouping by motion features | Done |
+| Streaming pipeline | Async 3-stage decode→inference→analysis | Done |
+| Full match analyser | kinetica_analyse_match CLI tool with end-to-end pipeline | Done |
+| Unit tests | 200+ tests pass via `ctest` | Done |
 | CI pipeline | GitHub Actions builds on Ubuntu, runs tests and demo | Done |
 
 ## Phase 2: ML Integration

@@ -159,6 +159,8 @@ Options:
   --streaming            Use async streaming pipeline
   --stats <path>          Write timing stats to JSON file
   --quiet                 Suppress progress output
+  --dry-run              Validate inputs and config, then exit
+  --version               Show version and backend info
 ```
 
 ## Run
@@ -188,7 +190,7 @@ Generates a synthetic 90-frame walking animation and exports `demo_clip.json` an
 cd hypermotion/build && ctest --output-on-failure
 ```
 
-Test suite covers: core types, math utilities, signal processing, skeleton mapping, canonical motion (round-trip stability), motion segmentation, tracking persistence, clip quality filtering, motion fingerprinting, BVH/JSON export, configuration I/O, and a full synthetic end-to-end integration test that exercises the complete pipeline path from skeleton frames through to database export.
+Test suite (210+ tests) covers: core types, math utilities, signal processing, skeleton mapping, canonical motion (round-trip stability, limb stabilisation, root orientation smoothness), motion segmentation (boundary detection, coverage, minimum lengths), tracking persistence (occlusion recovery, duplicate prevention), clip quality filtering (missing joints, jitter, duration), animation database (export structure, metadata serialisation, schema versioning), motion fingerprinting (determinism, similarity), pipeline stats serialisation completeness, config round-trips, and multiple synthetic end-to-end integration tests that exercise the complete pipeline path from skeleton frames through canonical motion to database export.
 
 ## New Modules
 
@@ -237,6 +239,8 @@ Decode Thread ──► [Frame Queue] ──► Inference Thread ──► [Pose
 - Optional frame dropping when queues are full
 - Clips delivered via callback as they complete
 - Real-time statistics monitoring
+
+**Important**: Streaming mode produces per-player clips with skeleton mapping, signal processing, and segmentation. It does **not** currently run clip extraction, quality filtering, motion classification, clustering, or database export. Use standard (non-streaming) mode for the full pipeline with structured output.
 
 ### Motion Analysis Systems
 
@@ -337,7 +341,7 @@ The `CanonicalMotionBuilder` sits at the centre of the pipeline: tracked pose se
 
 ## Roadmap
 
-- **Phase 1** (complete): Core pipeline, demo mode, BVH/JSON export, unit tests, all foundational algorithms, pipeline integration and hardening
+- **Phase 1** (complete): Core pipeline with all foundational algorithms, multi-player tracking, canonical motion, segmentation, fingerprinting, animation database, streaming pipeline, 7 CLI tools, demo mode, BVH/JSON export, 210+ unit/integration tests, CI pipeline, hardening pass
 - **Phase 2** (next): Train and integrate ML models (YOLOv8 + HRNet pose, TCN motion classifier, diffusion generator), ONNX export from Python training scripts
 - **Phase 3**: Studio GUI with timeline and 3D viewport, real-time streaming, style transfer, TensorRT optimisation
 

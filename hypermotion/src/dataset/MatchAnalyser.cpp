@@ -5,6 +5,9 @@
 #include "HyperMotion/signal/SignalPipeline.h"
 #include "HyperMotion/signal/FootContactFilter.h"
 #include "HyperMotion/segmenter/MotionSegmenter.h"
+#include "HyperMotion/motion/CanonicalMotionBuilder.h"
+#include "HyperMotion/motion/TrajectoryExtractor.h"
+#include "HyperMotion/analysis/MotionFingerprint.h"
 #include "HyperMotion/analysis/MotionEmbedder.h"
 
 #include <set>
@@ -25,6 +28,10 @@ struct MatchAnalyser::Impl {
     segmenter::MotionSegmenter segmenter;
     signal::FootContactFilter footContact;
 
+    motion::CanonicalMotionBuilder canonicalBuilder;
+    motion::TrajectoryExtractor trajectoryExtractor;
+    analysis::MotionFingerprint fingerprinter;
+
     ClipExtractor clipExtractor;
     ClipQualityFilter qualityFilter;
     MotionClassifier classifier;
@@ -41,6 +48,9 @@ struct MatchAnalyser::Impl {
         , signalPipeline(cfg.pipelineConfig.signalConfig)
         , segmenter(cfg.pipelineConfig.segmenterConfig)
         , footContact(cfg.pipelineConfig.signalConfig.footConfig)
+        , canonicalBuilder(cfg.pipelineConfig.canonicalConfig)
+        , trajectoryExtractor(cfg.pipelineConfig.trajectoryConfig)
+        , fingerprinter(cfg.pipelineConfig.fingerprintConfig)
         , clipExtractor(cfg.clipConfig)
         , qualityFilter(cfg.qualityConfig)
         , classifier(cfg.classifierModelPath) {
@@ -151,7 +161,7 @@ MatchAnalysisResult MatchAnalyser::processMatch(
     int playerIdx = 0;
     int totalPlayers = static_cast<int>(playerIDs.size());
 
-    double skelMs = 0, sigMs = 0, segMs = 0;
+    double skelMs = 0, sigMs = 0, canonMs = 0, trajMs = 0, segMs = 0, fpMs = 0;
 
     for (int pid : playerIDs) {
         PlayerData pd;
@@ -174,14 +184,41 @@ MatchAnalysisResult MatchAnalyser::processMatch(
             impl_->signalPipeline.process(pd.skeletonFrames);
         }
 
+        // Canonical motion (stabilise limbs, extract root motion)
+        if (impl_->config.pipelineConfig.enableCanonicalMotion) {
+            AnimClip tmpClip;
+            tmpClip.frames = pd.skeletonFrames;
+            tmpClip.fps = impl_->config.pipelineConfig.targetFPS;
+            tmpClip.trackingID = pid;
+            {
+                ScopedTimer t(canonMs);
+                impl_->canonicalBuilder.process(tmpClip);
+            }
+            pd.skeletonFrames = std::move(tmpClip.frames);
+        }
+
         // Foot contact detection
         pd.contacts = impl_->footContact.detectContacts(pd.skeletonFrames);
+
+        // Trajectory extraction
+        if (impl_->config.pipelineConfig.enableTrajectoryExtraction) {
+            AnimClip tmpClip;
+            tmpClip.frames = pd.skeletonFrames;
+            tmpClip.fps = impl_->config.pipelineConfig.targetFPS;
+            tmpClip.trackingID = pid;
+            {
+                ScopedTimer t(trajMs);
+                impl_->trajectoryExtractor.process(tmpClip);
+            }
+            // Trajectories are stored on the clip, not frames — we keep going
+        }
 
         // Motion segmentation
         {
             ScopedTimer t(segMs);
             pd.segments = impl_->segmenter.segment(pd.skeletonFrames, pid);
         }
+        result.pipelineStats.segmentsFound += static_cast<int>(pd.segments.size());
 
         playerDatas.push_back(std::move(pd));
         playerIdx++;
@@ -195,6 +232,8 @@ MatchAnalysisResult MatchAnalyser::processMatch(
 
     result.pipelineStats.skeletonMappingMs = skelMs;
     result.pipelineStats.signalProcessingMs = sigMs;
+    result.pipelineStats.canonicalMotionMs = canonMs;
+    result.pipelineStats.trajectoryMs = trajMs;
     result.pipelineStats.segmentationMs = segMs;
 
     // ----------------------------------------------------------------
@@ -252,6 +291,16 @@ MatchAnalysisResult MatchAnalyser::processMatch(
             }
             entry.clipMeta.hasFootContacts = !entry.footContacts.empty();
 
+            // Compute motion fingerprint
+            if (impl_->config.pipelineConfig.enableFingerprinting && !entry.clip.frames.empty()) {
+                double fpT = 0;
+                {
+                    ScopedTimer t(fpT);
+                    impl_->fingerprinter.compute(entry.clip);
+                }
+                fpMs += fpT;
+            }
+
             // Compute motion embedding
             entry.motionEmbedding = impl_->motionEmbedder.embedClip(entry.clip);
             entry.hasMotionEmbedding = true;
@@ -270,6 +319,7 @@ MatchAnalysisResult MatchAnalyser::processMatch(
     result.clipsExtracted = totalExtracted;
     result.clipsAccepted = totalAccepted;
     result.clipsRejected = totalRejected;
+    result.pipelineStats.fingerprintMs = fpMs;
 
     // ----------------------------------------------------------------
     // Phase 5: Export (90% - 100%)

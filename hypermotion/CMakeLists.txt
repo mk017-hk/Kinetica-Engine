@@ -206,6 +206,15 @@ message(STATUS "========================================")
 message(STATUS "")
 
 # -------------------------------------------------------------------
+# Output directories — ensure consistent binary paths regardless of
+# whether OpenCV is fetched (sets EXECUTABLE_OUTPUT_PATH) or system.
+# -------------------------------------------------------------------
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+# -------------------------------------------------------------------
 # Library: hypermotion
 # -------------------------------------------------------------------
 

@@ -34,6 +34,7 @@ Video Input ──► Player Detection (YOLOv8) ──► Pose Estimation (HRNet
 | Motion Analysis | `hm::motion::` | Implemented | Foot contact detection, trajectory extraction and prediction |
 | Motion Segmentation | `hm::segmenter::` | Implemented | Feature extraction, temporal classification, segment merging |
 | Motion Clustering | `hm::dataset::` | Implemented | K-means clustering of clips by motion features |
+| Motion Intelligence | `hm::analysis::` | Implemented | Motion embeddings, similarity search, interpolation |
 | ML Generation | `hm::ml::` | In Progress | Diffusion-based motion synthesis (offline, requires trained models) |
 | Player Style | `hm::style::` | In Progress | Style fingerprinting and library (requires trained models) |
 | Export | `hm::xport::` | Implemented | BVH, JSON, clip utilities (sub-clip, resample, mirror, concatenate) |
@@ -144,6 +145,45 @@ Automatically discovers animation categories by clustering clips based on motion
 Uses k-means with k-means++ initialization and feature normalisation. Each clip is assigned a cluster label (`cluster_01`, `cluster_02`, ...) stored in `AnimClip::clusterID`.
 
 Clustering enables automatic dataset organisation without manual labelling, and the discovered categories can be used to build motion matching databases, balance training data, or identify rare motion types.
+
+## Motion Intelligence System
+
+### Motion Embeddings (`hm::analysis::MotionEmbedder`)
+
+Converts animation clips into 128-dimensional L2-normalized embedding vectors using a Temporal CNN encoder. The encoder processes 22-joint world positions (66D per frame) through dilated residual blocks with global average pooling, producing a compact motion representation.
+
+- **ONNX inference**: loads a trained `motion_encoder.onnx` model via ONNX Runtime
+- **Fallback embedding**: when no model is available, computes a deterministic feature-based embedding from averaged joint positions and velocities
+- **Auto-integration**: every clip extracted by the pipeline automatically receives an embedding, stored in `AnimationEntry::motionEmbedding`
+
+### Motion Search (`hm::analysis::MotionSearch`)
+
+Nearest-neighbour similarity search over the animation database using motion embeddings:
+
+- **Cosine similarity** (default) or **Euclidean distance** metrics
+- Configurable distance threshold and max results
+- Builds an index from all database entries that have embeddings
+- Use `searchSimilar()` to find clips most similar to a given animation
+
+### Motion Interpolation (`hm::analysis::MotionInterpolator`)
+
+Generates new motion representations by interpolating in the 128D embedding space:
+
+- **LERP**: linear interpolation between two embeddings
+- **SLERP**: spherical linear interpolation (preserves embedding magnitude on the hypersphere), with automatic fallback to LERP for near-parallel vectors
+- **Blend**: weighted average of multiple embeddings for multi-way mixing
+- **Sequence generation**: produce N intermediate steps between two endpoints
+- All outputs optionally L2-normalized
+
+### Training Pipeline (`training/`)
+
+Python (PyTorch) training pipeline for the motion encoder:
+
+- **Temporal CNN architecture**: Conv1D(66→128) → 4 dilated residual blocks → GAP → MLP → 128D embedding (~1.6M parameters)
+- **Online triplet loss** with semi-hard negative mining (margin=0.3)
+- **Dataset builder**: converts exported JSON clips to normalized training samples with sliding window extraction
+- **ONNX export**: trained model exported for C++ inference
+- **Visualisation**: PCA/t-SNE scatter plots of the motion embedding space, coloured by motion type or cluster
 
 ## Demo Output
 

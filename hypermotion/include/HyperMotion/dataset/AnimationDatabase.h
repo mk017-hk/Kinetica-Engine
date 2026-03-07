@@ -19,6 +19,10 @@ struct AnimationEntry {
     ClassificationResult classification;
     QualityResult quality;
     std::vector<signal::FootContactFilter::ContactState> footContacts;
+
+    // Motion embedding (128D, L2-normalized). Empty if not computed.
+    std::array<float, MOTION_EMBEDDING_DIM> motionEmbedding{};
+    bool hasMotionEmbedding = false;
 };
 
 /// Summary statistics for the database.

@@ -226,6 +226,7 @@ constexpr const char* JOINT_NAMES[JOINT_COUNT] = {
 constexpr int ROTATION_DIM = 6;      // 6D rotation per joint
 constexpr int FRAME_DIM = 132;       // 22 joints x 6D
 constexpr int STYLE_DIM = 64;        // Style embedding dimension
+constexpr int MOTION_EMBEDDING_DIM = 128;  // Motion encoder embedding dimension
 constexpr int COCO_KEYPOINTS = 17;   // COCO pose keypoints
 constexpr int REID_DIM = 128;        // Re-identification feature dimension
 

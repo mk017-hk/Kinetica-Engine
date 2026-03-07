@@ -5,6 +5,7 @@
 #include "HyperMotion/signal/SignalPipeline.h"
 #include "HyperMotion/signal/FootContactFilter.h"
 #include "HyperMotion/segmenter/MotionSegmenter.h"
+#include "HyperMotion/analysis/MotionEmbedder.h"
 
 #include <set>
 #include <sstream>
@@ -28,6 +29,7 @@ struct MatchAnalyser::Impl {
     ClipQualityFilter qualityFilter;
     MotionClassifier classifier;
     AnimationDatabase database;
+    analysis::MotionEmbedder motionEmbedder;
 
     bool initialized = false;
 
@@ -41,7 +43,11 @@ struct MatchAnalyser::Impl {
         , footContact(cfg.pipelineConfig.signalConfig.footConfig)
         , clipExtractor(cfg.clipConfig)
         , qualityFilter(cfg.qualityConfig)
-        , classifier(cfg.classifierModelPath) {}
+        , classifier(cfg.classifierModelPath) {
+        analysis::MotionEmbedderConfig embConfig;
+        embConfig.onnxModelPath = cfg.motionEncoderModelPath;
+        motionEmbedder = analysis::MotionEmbedder(embConfig);
+    }
 };
 
 MatchAnalyser::MatchAnalyser(const MatchAnalyserConfig& config)
@@ -61,6 +67,7 @@ bool MatchAnalyser::initialize() {
 
     impl_->segmenter.initialize();  // optional — heuristic fallback
     impl_->classifier.initialize(); // optional — heuristic fallback
+    impl_->motionEmbedder.initialize(); // optional — fallback embedding
 
     impl_->initialized = true;
     HM_LOG_INFO(TAG, "Match analyser ready");
@@ -244,6 +251,10 @@ MatchAnalysisResult MatchAnalyser::processMatch(
                 entry.footContacts.push_back(pd.contacts[f]);
             }
             entry.clipMeta.hasFootContacts = !entry.footContacts.empty();
+
+            // Compute motion embedding
+            entry.motionEmbedding = impl_->motionEmbedder.embedClip(entry.clip);
+            entry.hasMotionEmbedding = true;
 
             impl_->database.addEntry(std::move(entry));
             totalAccepted++;

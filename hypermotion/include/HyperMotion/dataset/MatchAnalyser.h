@@ -7,6 +7,7 @@
 #include "HyperMotion/dataset/ClipQualityFilter.h"
 #include "HyperMotion/dataset/MotionClassifier.h"
 #include "HyperMotion/dataset/AnimationDatabase.h"
+#include "HyperMotion/analysis/MotionEmbedder.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -20,6 +21,7 @@ struct MatchAnalyserConfig {
     ClipQualityConfig qualityConfig;
 
     std::string classifierModelPath;   // optional TCN model
+    std::string motionEncoderModelPath; // optional motion encoder ONNX model
     std::string outputDirectory;
 
     bool exportBVH = true;

@@ -129,6 +129,16 @@ int AnimationDatabase::exportToDirectory(const std::string& rootDir,
             if (fc.leftFootContact || fc.rightFootContact) contactFrames++;
         }
         meta["footContactFrames"] = contactFrames;
+        meta["clusterID"] = entry.clip.clusterID;
+
+        // Motion embedding
+        if (entry.hasMotionEmbedding) {
+            nlohmann::json embArr = nlohmann::json::array();
+            for (int d = 0; d < MOTION_EMBEDDING_DIM; ++d) {
+                embArr.push_back(entry.motionEmbedding[d]);
+            }
+            meta["motionEmbedding"] = embArr;
+        }
 
         std::ofstream metaFile(basePath + ".meta.json");
         if (metaFile.is_open()) {

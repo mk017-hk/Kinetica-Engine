@@ -16,6 +16,7 @@ from ..models.motion_transformer import MotionTransformer
 from ..models.condition_encoder import ConditionEncoder
 from ..models.temporal_conv_net import TemporalConvNet
 from ..models.style_encoder import StyleEncoder
+from ..models.motion_encoder import MotionEncoder, MOTION_INPUT_DIM
 from ..models.constants import FRAME_DIM, CONDITION_DIM, FEATURE_DIM_SEGMENTER, STYLE_INPUT_DIM
 
 log = logging.getLogger(__name__)
@@ -122,4 +123,32 @@ def export_style_encoder(model: StyleEncoder, output_path: str | Path,
         },
     )
     log.info(f"Exported style encoder: {output_path}")
+    return output_path
+
+
+def export_motion_encoder(model: MotionEncoder, output_path: str | Path,
+                           seq_len: int = 64, opset: int = 17) -> Path:
+    """Export the motion encoder to ONNX for C++ inference.
+
+    Input:  joint_positions [batch, seq_len, 66]
+    Output: motion_embedding [batch, 128]
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    model.eval()
+
+    x = torch.randn(1, seq_len, MOTION_INPUT_DIM)
+
+    torch.onnx.export(
+        model, (x,), str(output_path),
+        opset_version=opset,
+        input_names=["joint_positions"],
+        output_names=["motion_embedding"],
+        dynamic_axes={
+            "joint_positions": {0: "batch", 1: "seq_len"},
+            "motion_embedding": {0: "batch"},
+        },
+    )
+    log.info(f"Exported motion encoder: {output_path}")
     return output_path

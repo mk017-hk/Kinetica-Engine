@@ -10,6 +10,8 @@ MOTION_TYPE_COUNT = 16
 # Feature dimensions
 FEATURE_DIM_SEGMENTER = 70   # 66 euler + 3 root vel + 1 angular vel
 STYLE_INPUT_DIM = 201         # 132 rot + 3 root vel + 66 angular vel
+MOTION_EMBEDDING_DIM = 128    # motion encoder output dimension
+MOTION_INPUT_DIM = JOINT_COUNT * 3  # 22 * 3 = 66 (world positions)
 
 # Skeleton hierarchy (parent indices, -1 = root)
 PARENT_INDICES = [

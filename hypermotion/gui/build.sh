@@ -47,8 +47,8 @@ fi
 
 CMAKE_ARGS="-DHM_BUILD_GUI=ON -DHM_BUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
 
-# CUDA and TensorRT are OFF by default — enable with: HM_USE_CUDA=ON ./build.sh
-CMAKE_ARGS="${CMAKE_ARGS} -DHM_USE_CUDA=${HM_USE_CUDA:-OFF} -DHM_USE_TENSORRT=${HM_USE_TENSORRT:-OFF}"
+# CUDA and TensorRT are OFF by default — enable with: HM_ENABLE_CUDA=ON ./build.sh
+CMAKE_ARGS="${CMAKE_ARGS} -DHM_ENABLE_CUDA=${HM_ENABLE_CUDA:-OFF} -DHM_ENABLE_TENSORRT=${HM_ENABLE_TENSORRT:-OFF}"
 
 # Optional overrides via environment variables
 [ -n "$IMGUI_DIR" ]        && CMAKE_ARGS="${CMAKE_ARGS} -DIMGUI_DIR=${IMGUI_DIR}"

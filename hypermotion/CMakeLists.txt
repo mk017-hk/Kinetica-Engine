@@ -19,9 +19,18 @@ option(HM_ENABLE_CUDA "Enable CUDA acceleration" OFF)
 option(HM_ENABLE_TENSORRT "Enable TensorRT backend" OFF)
 option(HM_ENABLE_LIBTORCH "Enable LibTorch for training modules" OFF)
 
-# Legacy aliases
-set(HM_USE_TENSORRT ${HM_ENABLE_TENSORRT})
+# Accept legacy cache variables from older scripts.  If someone passes
+# -DHM_USE_CUDA=ON but did not set HM_ENABLE_CUDA, honour the legacy name.
+if(DEFINED HM_USE_CUDA AND NOT HM_ENABLE_CUDA)
+    set(HM_ENABLE_CUDA ${HM_USE_CUDA} CACHE BOOL "" FORCE)
+endif()
+if(DEFINED HM_USE_TENSORRT AND NOT HM_ENABLE_TENSORRT)
+    set(HM_ENABLE_TENSORRT ${HM_USE_TENSORRT} CACHE BOOL "" FORCE)
+endif()
+
+# Canonical → internal aliases (used in conditionals below)
 set(HM_USE_CUDA ${HM_ENABLE_CUDA})
+set(HM_USE_TENSORRT ${HM_ENABLE_TENSORRT})
 
 # -------------------------------------------------------------------
 # Dependencies — try system packages first, fall back to FetchContent
@@ -181,6 +190,31 @@ if(HM_USE_TENSORRT)
 endif()
 
 # -------------------------------------------------------------------
+# Configuration summary
+# -------------------------------------------------------------------
+
+message(STATUS "")
+message(STATUS "=== HyperMotion Build Configuration ===")
+message(STATUS "  CUDA acceleration : ${HM_ENABLE_CUDA}")
+message(STATUS "  TensorRT backend  : ${HM_ENABLE_TENSORRT}")
+message(STATUS "  LibTorch training : ${HM_ENABLE_LIBTORCH}")
+message(STATUS "  ONNX Runtime      : ${ONNXRUNTIME_INCLUDE_DIR}")
+message(STATUS "  Demo mode         : ${HM_DEMO_MODE}")
+message(STATUS "  GUI               : ${HM_BUILD_GUI}")
+message(STATUS "  Tests             : ${HM_BUILD_TESTS}")
+message(STATUS "========================================")
+message(STATUS "")
+
+# -------------------------------------------------------------------
+# Output directories — ensure consistent binary paths regardless of
+# whether OpenCV is fetched (sets EXECUTABLE_OUTPUT_PATH) or system.
+# -------------------------------------------------------------------
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+# -------------------------------------------------------------------
 # Library: hypermotion
 # -------------------------------------------------------------------
 
@@ -189,6 +223,7 @@ set(HM_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(HM_CORE_SOURCES
     src/core/MathUtils.cpp
     src/core/Logger.cpp
+    src/core/PipelineConfigIO.cpp
 )
 
 set(HM_POSE_SOURCES
@@ -242,6 +277,31 @@ set(HM_EXPORT_SOURCES
     src/export/AnimClipUtils.cpp
 )
 
+set(HM_TRACKING_SOURCES
+    src/tracking/PlayerIDManager.cpp
+    src/tracking/MultiPlayerTracker.cpp
+)
+
+set(HM_ANALYSIS_SOURCES
+    src/analysis/MotionEmbedder.cpp
+    src/analysis/MotionSearch.cpp
+    src/analysis/MotionInterpolator.cpp
+)
+
+set(HM_MOTION_SOURCES
+    src/motion/FootContactDetector.cpp
+    src/motion/TrajectoryExtractor.cpp
+)
+
+set(HM_DATASET_SOURCES
+    src/dataset/ClipExtractor.cpp
+    src/dataset/ClipQualityFilter.cpp
+    src/dataset/MotionClassifier.cpp
+    src/dataset/AnimationDatabase.cpp
+    src/dataset/MatchAnalyser.cpp
+    src/dataset/MotionClusterer.cpp
+)
+
 set(HM_PIPELINE_SOURCES
     src/Pipeline.cpp
 )
@@ -255,6 +315,10 @@ add_library(hypermotion STATIC
     ${HM_ML_SOURCES}
     ${HM_STYLE_SOURCES}
     ${HM_EXPORT_SOURCES}
+    ${HM_TRACKING_SOURCES}
+    ${HM_ANALYSIS_SOURCES}
+    ${HM_MOTION_SOURCES}
+    ${HM_DATASET_SOURCES}
     ${HM_PIPELINE_SOURCES}
 )
 
@@ -318,6 +382,12 @@ if(HM_BUILD_TOOLS)
 
     add_executable(hm_batch tools/hm_batch.cpp)
     target_link_libraries(hm_batch PRIVATE hypermotion)
+
+    add_executable(hm_config tools/hm_config.cpp)
+    target_link_libraries(hm_config PRIVATE hypermotion)
+
+    add_executable(kinetica_analyse_match tools/kinetica_analyse_match.cpp)
+    target_link_libraries(kinetica_analyse_match PRIVATE hypermotion)
 endif()
 
 # -------------------------------------------------------------------
@@ -351,7 +421,7 @@ install(TARGETS hypermotion
 install(DIRECTORY ${HM_INCLUDE_DIR}/HyperMotion DESTINATION include)
 
 if(HM_BUILD_TOOLS)
-    install(TARGETS hm_extract hm_train hm_style hm_batch
+    install(TARGETS hm_extract hm_train hm_style hm_batch hm_config kinetica_analyse_match
         RUNTIME DESTINATION bin)
 endif()
 
@@ -382,6 +452,7 @@ if(HM_BUILD_TESTS)
         tests/test_export.cpp
         tests/test_noise_scheduler.cpp
         tests/test_skeleton.cpp
+        tests/test_config.cpp
     )
     target_link_libraries(hm_tests PRIVATE hypermotion GTest::gtest_main)
     target_include_directories(hm_tests PRIVATE ${HM_INCLUDE_DIR})

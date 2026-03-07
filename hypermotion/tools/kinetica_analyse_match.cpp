@@ -4,6 +4,7 @@
 #include "HyperMotion/streaming/StreamingPipeline.h"
 #include "HyperMotion/analysis/MotionFingerprint.h"
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <chrono>
@@ -176,14 +177,63 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Validate input file exists
+    if (!std::filesystem::exists(args.inputVideo)) {
+        std::cerr << "Error: input video not found: " << args.inputVideo << "\n";
+        return 1;
+    }
+
+    // Validate output directory is writable (create if needed)
+    try {
+        std::filesystem::create_directories(args.outputDir);
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error: cannot create output directory: " << args.outputDir
+                  << " (" << e.what() << ")\n";
+        return 1;
+    }
+
     hm::Logger::instance().setLevel(
         args.quiet ? hm::LogLevel::Warn : hm::LogLevel::Info);
+
+    if (!args.quiet) {
+        std::cout << "=== Kinetica Match Analyser ===\n"
+                  << "  Input:  " << args.inputVideo << "\n"
+                  << "  Output: " << args.outputDir << "\n"
+                  << "  FPS:    " << args.fps << "\n"
+                  << "  Export:";
+        if (args.exportBVH) std::cout << " BVH";
+        if (args.exportJSON) std::cout << " JSON";
+        std::cout << "\n";
+
+        // Report which ML models are configured
+        bool hasModels = false;
+        if (!args.detectorModel.empty()) {
+            std::cout << "  Detector:   " << args.detectorModel << "\n";
+            hasModels = true;
+        }
+        if (!args.poseModel.empty()) {
+            std::cout << "  Pose model: " << args.poseModel << "\n";
+            hasModels = true;
+        }
+        if (!args.segmenterModel.empty()) {
+            std::cout << "  Segmenter:  " << args.segmenterModel << "\n";
+            hasModels = true;
+        }
+        if (!hasModels) {
+            std::cout << "  Models:     none (heuristic fallbacks will be used)\n";
+        }
+        std::cout << "\n";
+    }
 
     // Build config: start from file, overlay CLI args
     hm::PipelineConfig pipelineCfg;
     if (!args.configFile.empty()) {
+        if (!std::filesystem::exists(args.configFile)) {
+            std::cerr << "Error: config file not found: " << args.configFile << "\n";
+            return 1;
+        }
         if (!hm::loadPipelineConfig(args.configFile, pipelineCfg)) {
-            std::cerr << "Failed to load config: " << args.configFile << "\n";
+            std::cerr << "Error: failed to parse config: " << args.configFile << "\n";
             return 1;
         }
     }
@@ -259,7 +309,30 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Report pipeline stage timings
+    std::cout << "\n  Stage timings:\n";
+    auto& ps = result.pipelineStats;
+    if (ps.poseExtractionMs > 0)
+        std::cout << "    Pose extraction:  " << static_cast<int>(ps.poseExtractionMs) << "ms\n";
+    if (ps.skeletonMappingMs > 0)
+        std::cout << "    Skeleton mapping: " << static_cast<int>(ps.skeletonMappingMs) << "ms\n";
+    if (ps.signalProcessingMs > 0)
+        std::cout << "    Signal processing:" << static_cast<int>(ps.signalProcessingMs) << "ms\n";
+    if (ps.segmentationMs > 0)
+        std::cout << "    Segmentation:     " << static_cast<int>(ps.segmentationMs) << "ms\n";
+    if (ps.exportMs > 0)
+        std::cout << "    Export:           " << static_cast<int>(ps.exportMs) << "ms\n";
+
     std::cout << "\n  Output: " << args.outputDir << "/\n";
+
+    // Count exported files
+    int exportedFiles = 0;
+    try {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(args.outputDir)) {
+            if (entry.is_regular_file()) ++exportedFiles;
+        }
+        std::cout << "  Files exported: " << exportedFiles << "\n";
+    } catch (...) {}
 
     // Save stats
     if (!args.statsOutput.empty()) {

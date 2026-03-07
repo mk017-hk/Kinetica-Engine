@@ -232,6 +232,8 @@ set(HM_POSE_SOURCES
     src/pose/PoseTracker.cpp
     src/pose/DepthLifter.cpp
     src/pose/MultiPersonPoseEstimator.cpp
+    src/pose/PoseEstimator.cpp
+    src/pose/PoseBatchProcessor.cpp
 )
 
 set(HM_SKELETON_SOURCES
@@ -286,11 +288,13 @@ set(HM_ANALYSIS_SOURCES
     src/analysis/MotionEmbedder.cpp
     src/analysis/MotionSearch.cpp
     src/analysis/MotionInterpolator.cpp
+    src/analysis/MotionFingerprint.cpp
 )
 
 set(HM_MOTION_SOURCES
     src/motion/FootContactDetector.cpp
     src/motion/TrajectoryExtractor.cpp
+    src/motion/CanonicalMotionBuilder.cpp
 )
 
 set(HM_DATASET_SOURCES
@@ -300,6 +304,10 @@ set(HM_DATASET_SOURCES
     src/dataset/AnimationDatabase.cpp
     src/dataset/MatchAnalyser.cpp
     src/dataset/MotionClusterer.cpp
+)
+
+set(HM_STREAMING_SOURCES
+    src/streaming/StreamingPipeline.cpp
 )
 
 set(HM_PIPELINE_SOURCES
@@ -319,6 +327,7 @@ add_library(hypermotion STATIC
     ${HM_ANALYSIS_SOURCES}
     ${HM_MOTION_SOURCES}
     ${HM_DATASET_SOURCES}
+    ${HM_STREAMING_SOURCES}
     ${HM_PIPELINE_SOURCES}
 )
 

@@ -1,6 +1,8 @@
 #include "HyperMotion/dataset/MatchAnalyser.h"
 #include "HyperMotion/core/Logger.h"
 #include "HyperMotion/core/PipelineConfigIO.h"
+#include "HyperMotion/streaming/StreamingPipeline.h"
+#include "HyperMotion/analysis/MotionFingerprint.h"
 
 #include <iostream>
 #include <string>
@@ -20,6 +22,7 @@ struct AnalyseArgs {
     bool exportBVH = true;
     bool exportJSON = true;
     bool quiet = false;
+    bool streaming = false;
     std::string statsOutput;
 };
 
@@ -44,9 +47,23 @@ static void printUsage() {
         "  --fps <value>           Target FPS (default: 30)\n"
         "  --no-bvh               Skip BVH export\n"
         "  --no-json              Skip JSON export\n"
+        "  --streaming            Use async streaming pipeline\n"
         "  --stats <path>          Write timing stats to JSON file\n"
         "  --quiet                 Suppress progress output\n"
         "  --help                  Show this help\n"
+        "\n"
+        "Pipeline:\n"
+        "  1. Decode video frames\n"
+        "  2. Detect players (YOLOv8)\n"
+        "  3. Estimate 2D poses (HRNet) and lift to 3D\n"
+        "  4. Track players across frames (Hungarian + ReID)\n"
+        "  5. Map to 22-joint skeleton\n"
+        "  6. Signal processing (outlier, Savitzky-Golay, Butterworth, quat smooth)\n"
+        "  7. Canonical motion (stabilise limbs, solve root orientation)\n"
+        "  8. Segment motion types (velocity, direction, foot contact)\n"
+        "  9. Extract clips (0.5-5s), quality filter, classify\n"
+        " 10. Compute motion fingerprints and cluster\n"
+        " 11. Export to BVH + JSON animation database\n"
         "\n"
         "Output structure:\n"
         "  <output_dir>/\n"
@@ -55,10 +72,12 @@ static void printUsage() {
         "    sprint/...\n"
         "    database_summary.json\n"
         "\n"
-        "Example:\n"
+        "Examples:\n"
         "  kinetica_analyse_match match.mp4 animations/ \\\n"
         "    --detector models/yolov8.onnx \\\n"
-        "    --pose models/hrnet.onnx\n";
+        "    --pose models/hrnet.onnx\n"
+        "\n"
+        "  kinetica_analyse_match match.mp4 animations/ --streaming\n";
 }
 
 static AnalyseArgs parseArgs(int argc, char* argv[]) {
@@ -85,11 +104,67 @@ static AnalyseArgs parseArgs(int argc, char* argv[]) {
         else if (arg == "--fps" && i + 1 < argc) args.fps = std::stof(argv[++i]);
         else if (arg == "--no-bvh") args.exportBVH = false;
         else if (arg == "--no-json") args.exportJSON = false;
+        else if (arg == "--streaming") args.streaming = true;
         else if (arg == "--stats" && i + 1 < argc) args.statsOutput = argv[++i];
         else if (arg == "--quiet") args.quiet = true;
         else if (arg == "--help") { printUsage(); std::exit(0); }
     }
     return args;
+}
+
+static int runStreaming(const AnalyseArgs& args, hm::PipelineConfig& pipelineCfg) {
+    hm::streaming::StreamingPipelineConfig streamCfg;
+    streamCfg.pipelineConfig = pipelineCfg;
+    streamCfg.decodeThreads = 1;
+    streamCfg.inferenceThreads = 1;
+    streamCfg.analysisThreads = 1;
+
+    hm::streaming::StreamingPipeline pipeline(streamCfg);
+    if (!pipeline.initialize()) {
+        std::cerr << "Failed to initialise streaming pipeline\n";
+        return 1;
+    }
+
+    int clipsDelivered = 0;
+
+    auto clipCB = [&clipsDelivered, &args](hm::AnimClip clip, int playerID) {
+        clipsDelivered++;
+        if (!args.quiet) {
+            std::cout << "  Clip: " << clip.name << " (player " << playerID
+                      << ", " << clip.frames.size() << " frames)\n";
+        }
+    };
+
+    auto progressCB = [&args](const hm::streaming::StreamingStats& stats) {
+        if (!args.quiet && stats.framesDecoded % 100 == 0) {
+            std::cout << "\r[Streaming] decoded=" << stats.framesDecoded
+                      << " inferred=" << stats.framesInferred
+                      << " analysed=" << stats.framesAnalysed
+                      << " clips=" << stats.clipsProduced
+                      << " dropped=" << stats.framesDropped
+                      << "          " << std::flush;
+        }
+    };
+
+    if (!pipeline.startProcessing(args.inputVideo, clipCB, progressCB)) {
+        std::cerr << "Failed to start streaming processing\n";
+        return 1;
+    }
+
+    auto clips = pipeline.waitForCompletion();
+    auto stats = pipeline.getStats();
+
+    if (!args.quiet) std::cout << "\n\n";
+
+    std::cout << "=== Streaming Analysis Complete ===\n"
+              << "  Frames decoded:  " << stats.framesDecoded << "\n"
+              << "  Frames inferred: " << stats.framesInferred << "\n"
+              << "  Frames analysed: " << stats.framesAnalysed << "\n"
+              << "  Frames dropped:  " << stats.framesDropped << "\n"
+              << "  Clips produced:  " << stats.clipsProduced << "\n"
+              << "\n  Output: " << args.outputDir << "/\n";
+
+    return 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -125,7 +200,12 @@ int main(int argc, char* argv[]) {
     pipelineCfg.targetFPS = args.fps;
     pipelineCfg.poseConfig.targetFPS = args.fps;
 
-    // Build MatchAnalyserConfig
+    // Streaming mode
+    if (args.streaming) {
+        return runStreaming(args, pipelineCfg);
+    }
+
+    // Standard synchronous mode via MatchAnalyser
     hm::dataset::MatchAnalyserConfig matchCfg;
     matchCfg.pipelineConfig = pipelineCfg;
     matchCfg.classifierModelPath = args.classifierModel;

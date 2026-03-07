@@ -3,7 +3,9 @@
 #include "HyperMotion/core/ScopedTimer.h"
 #include "HyperMotion/motion/FootContactDetector.h"
 #include "HyperMotion/motion/TrajectoryExtractor.h"
+#include "HyperMotion/motion/CanonicalMotionBuilder.h"
 #include "HyperMotion/dataset/MotionClusterer.h"
+#include "HyperMotion/analysis/MotionFingerprint.h"
 
 #include <filesystem>
 #include <set>
@@ -23,7 +25,9 @@ struct Pipeline::Impl {
     xport::JSONExporter jsonExporter;
     motion::FootContactDetector footContactDetector;
     motion::TrajectoryExtractor trajectoryExtractor;
+    motion::CanonicalMotionBuilder canonicalBuilder;
     dataset::MotionClusterer motionClusterer;
+    analysis::MotionFingerprint fingerprinter;
     bool initialized = false;
     PipelineStats lastStats;
 
@@ -37,7 +41,9 @@ struct Pipeline::Impl {
         , jsonExporter(cfg.jsonConfig)
         , footContactDetector(cfg.footContactConfig)
         , trajectoryExtractor(cfg.trajectoryConfig)
-        , motionClusterer(cfg.clusterConfig) {}
+        , canonicalBuilder(cfg.canonicalConfig)
+        , motionClusterer(cfg.clusterConfig)
+        , fingerprinter(cfg.fingerprintConfig) {}
 };
 
 Pipeline::Pipeline(const PipelineConfig& config)
@@ -156,7 +162,17 @@ std::vector<AnimClip> Pipeline::buildClips(
         clip.frames = std::move(skeletonFrames);
         clip.segments = std::move(segments);
 
-        // Step 4: Foot contact detection
+        // Step 4: Canonical motion (retarget, stabilise limbs, extract root)
+        if (impl_->config.enableCanonicalMotion) {
+            double canonMs = 0;
+            {
+                ScopedTimer t(canonMs);
+                impl_->canonicalBuilder.process(clip);
+            }
+            impl_->lastStats.canonicalMotionMs += canonMs;
+        }
+
+        // Step 5: Foot contact detection
         if (impl_->config.enableFootContactDetection) {
             double fcMs = 0;
             {
@@ -166,7 +182,7 @@ std::vector<AnimClip> Pipeline::buildClips(
             impl_->lastStats.footContactMs += fcMs;
         }
 
-        // Step 5: Trajectory extraction
+        // Step 6: Trajectory extraction
         if (impl_->config.enableTrajectoryExtraction) {
             double trajMs = 0;
             {
@@ -193,7 +209,7 @@ std::vector<AnimClip> Pipeline::buildClips(
         }
     }
 
-    // Step 6: Motion clustering (across all clips)
+    // Step 7: Motion clustering (across all clips)
     if (impl_->config.enableMotionClustering && clips.size() > 1) {
         double clusterMs = 0;
         {
@@ -262,8 +278,10 @@ std::vector<AnimClip> Pipeline::processVideo(
        << "skeleton=" << static_cast<int>(impl_->lastStats.skeletonMappingMs) << "ms, "
        << "signal=" << static_cast<int>(impl_->lastStats.signalProcessingMs) << "ms, "
        << "segment=" << static_cast<int>(impl_->lastStats.segmentationMs) << "ms, "
+       << "canonical=" << static_cast<int>(impl_->lastStats.canonicalMotionMs) << "ms, "
        << "footcontact=" << static_cast<int>(impl_->lastStats.footContactMs) << "ms, "
        << "trajectory=" << static_cast<int>(impl_->lastStats.trajectoryMs) << "ms, "
+       << "fingerprint=" << static_cast<int>(impl_->lastStats.fingerprintMs) << "ms, "
        << "clustering=" << static_cast<int>(impl_->lastStats.clusteringMs) << "ms, "
        << "export=" << static_cast<int>(impl_->lastStats.exportMs) << "ms, "
        << "elapsed=" << static_cast<int>(totalTimer.elapsedMs()) << "ms";

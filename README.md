@@ -291,11 +291,39 @@ hypermotion/
 └── gui/                    # Studio GUI (Dear ImGui, optional)
 ```
 
+## Why Canonical Motion Is the Source of Truth
+
+Every downstream module — segmentation, fingerprinting, dataset export, ML training, BVH output — consumes **canonical motion clips** rather than raw pose data. This design decision has several benefits:
+
+1. **Consistent skeleton**: All clips share the same 22-joint hierarchy with stabilised limb lengths, regardless of player body proportions in the video
+2. **Root motion separation**: Root position and orientation are stored independently from local joint rotations, enabling root motion curves for game engines
+3. **Noise isolation**: Limb length jitter, joint confidence dropouts, and tracking noise are filtered before data enters any analysis module
+4. **Retargeting-ready**: Local-space joint rotations transfer directly to any target skeleton that shares the same hierarchy
+5. **Reproducibility**: The canonical form is deterministic given the same input, making dataset versioning and comparison straightforward
+
+The `CanonicalMotionBuilder` sits at the centre of the pipeline: tracked pose sequences enter, and all subsequent processing (segmentation, quality filtering, fingerprinting, export) operates exclusively on the canonical representation.
+
+## Current Limitations
+
+- **No trained models shipped**: The repository includes ML infrastructure (ONNX inference, TCN classifiers) but does not bundle pre-trained weights. Without models, the pipeline uses heuristic fallbacks for detection, pose estimation, motion classification, and style encoding
+- **Heuristic pose estimation**: Without YOLO/HRNet ONNX models, the pose pipeline cannot process real video. Demo mode generates synthetic data to exercise the full pipeline
+- **Single-camera assumption**: The 2D→3D lifting uses monocular depth estimation. Multi-camera triangulation is not yet supported
+- **No real-time GUI**: The Studio GUI (`HM_BUILD_GUI`) is scaffolded but incomplete
+- **CPU-only default**: GPU acceleration requires CUDA 12.0+ and TensorRT, which are off by default
+
 ## Roadmap
 
-- **Phase 1** (current): Core pipeline, demo mode, BVH/JSON export, unit tests
-- **Phase 2**: ML model training, ONNX inference integration, multi-person tracking
-- **Phase 3**: Studio GUI, real-time streaming, style transfer at scale
+- **Phase 1** (current): Core pipeline, demo mode, BVH/JSON export, unit tests, all foundational algorithms
+- **Phase 2**: Train and integrate ML models (YOLOv8 + HRNet pose, TCN motion classifier, diffusion generator), ONNX export from Python training scripts
+- **Phase 3**: Studio GUI with timeline and 3D viewport, real-time streaming, style transfer, TensorRT optimisation
+
+### Immediate Next Steps
+
+1. Train YOLOv8 player detector on football broadcast data and export to ONNX
+2. Train HRNet pose estimator fine-tuned on sports poses and export to ONNX
+3. Train TCN motion classifier on labelled football motion segments
+4. Validate end-to-end pipeline on real match footage
+5. Add multi-camera support for improved 3D accuracy
 
 ## Licence
 

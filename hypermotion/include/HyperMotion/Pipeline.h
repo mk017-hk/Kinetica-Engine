@@ -10,7 +10,9 @@
 #include "HyperMotion/export/AnimClipUtils.h"
 #include "HyperMotion/motion/FootContactDetector.h"
 #include "HyperMotion/motion/TrajectoryExtractor.h"
+#include "HyperMotion/motion/CanonicalMotionBuilder.h"
 #include "HyperMotion/dataset/MotionClusterer.h"
+#include "HyperMotion/analysis/MotionFingerprint.h"
 
 #include <string>
 #include <vector>
@@ -28,11 +30,15 @@ struct PipelineConfig {
     xport::JSONExportConfig jsonConfig;
     motion::FootContactDetectorConfig footContactConfig;
     motion::TrajectoryExtractorConfig trajectoryConfig;
+    motion::CanonicalMotionBuilderConfig canonicalConfig;
     dataset::MotionClustererConfig clusterConfig;
+    analysis::MotionFingerprintConfig fingerprintConfig;
 
     bool enableFootContactDetection = true;
     bool enableTrajectoryExtraction = true;
     bool enableMotionClustering = true;
+    bool enableCanonicalMotion = true;
+    bool enableFingerprinting = true;
 
     float targetFPS = 30.0f;
     bool enableVisualization = false;
@@ -50,6 +56,8 @@ struct PipelineStats {
     double segmentationMs = 0.0;
     double footContactMs = 0.0;
     double trajectoryMs = 0.0;
+    double canonicalMotionMs = 0.0;
+    double fingerprintMs = 0.0;
     double clusteringMs = 0.0;
     double exportMs = 0.0;
     double totalMs = 0.0;

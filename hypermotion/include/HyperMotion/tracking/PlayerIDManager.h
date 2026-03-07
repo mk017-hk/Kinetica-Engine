@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HyperMotion/core/Types.h"
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>

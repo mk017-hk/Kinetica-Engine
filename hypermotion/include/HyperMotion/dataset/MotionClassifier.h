@@ -2,6 +2,7 @@
 
 #include "HyperMotion/core/Types.h"
 #include "HyperMotion/segmenter/MotionFeatureExtractor.h"
+#include <memory>
 #include <string>
 #include <vector>
 

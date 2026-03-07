@@ -268,6 +268,19 @@ set(HM_EXPORT_SOURCES
     src/export/AnimClipUtils.cpp
 )
 
+set(HM_TRACKING_SOURCES
+    src/tracking/PlayerIDManager.cpp
+    src/tracking/MultiPlayerTracker.cpp
+)
+
+set(HM_DATASET_SOURCES
+    src/dataset/ClipExtractor.cpp
+    src/dataset/ClipQualityFilter.cpp
+    src/dataset/MotionClassifier.cpp
+    src/dataset/AnimationDatabase.cpp
+    src/dataset/MatchAnalyser.cpp
+)
+
 set(HM_PIPELINE_SOURCES
     src/Pipeline.cpp
 )
@@ -281,6 +294,8 @@ add_library(hypermotion STATIC
     ${HM_ML_SOURCES}
     ${HM_STYLE_SOURCES}
     ${HM_EXPORT_SOURCES}
+    ${HM_TRACKING_SOURCES}
+    ${HM_DATASET_SOURCES}
     ${HM_PIPELINE_SOURCES}
 )
 
@@ -347,6 +362,9 @@ if(HM_BUILD_TOOLS)
 
     add_executable(hm_config tools/hm_config.cpp)
     target_link_libraries(hm_config PRIVATE hypermotion)
+
+    add_executable(kinetica_analyse_match tools/kinetica_analyse_match.cpp)
+    target_link_libraries(kinetica_analyse_match PRIVATE hypermotion)
 endif()
 
 # -------------------------------------------------------------------
@@ -380,7 +398,7 @@ install(TARGETS hypermotion
 install(DIRECTORY ${HM_INCLUDE_DIR}/HyperMotion DESTINATION include)
 
 if(HM_BUILD_TOOLS)
-    install(TARGETS hm_extract hm_train hm_style hm_batch hm_config
+    install(TARGETS hm_extract hm_train hm_style hm_batch hm_config kinetica_analyse_match
         RUNTIME DESTINATION bin)
 endif()
 

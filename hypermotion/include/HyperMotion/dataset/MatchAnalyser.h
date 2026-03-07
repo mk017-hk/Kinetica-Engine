@@ -51,9 +51,11 @@ using MatchProgressCallback =
 ///
 /// Pipeline:
 ///   video_ingest → player_detection → multi_player_tracking →
-///   pose_estimation → pose_temporal_smoothing → 3D_pose_lifting →
-///   motion_analysis → clip_extraction → clip_quality_filter →
-///   animation_database
+///   pose_estimation → skeleton_mapping → signal_processing →
+///   canonical_motion → foot_contact → trajectory_extraction →
+///   motion_segmentation → clip_extraction → clip_quality_filter →
+///   motion_classification → motion_fingerprint → motion_embedding →
+///   animation_database_export
 class MatchAnalyser {
 public:
     explicit MatchAnalyser(const MatchAnalyserConfig& config);

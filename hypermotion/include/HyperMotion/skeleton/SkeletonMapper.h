@@ -10,6 +10,7 @@ struct SkeletonMapperConfig {
     float minConfidenceThreshold = 0.2f;
     bool useVelocitySmoothing = true;
     float velocitySmoothingAlpha = 0.5f;
+    float fps = 30.0f;  // fallback frame rate for velocity computation
 };
 
 class SkeletonMapper {

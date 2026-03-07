@@ -28,6 +28,7 @@ struct SkeletonMapper::Impl {
     RotationSolver rotSolver;
     Vec3 prevRootPos;
     Quat prevRootRot = Quat::identity();
+    double prevTimestamp = 0.0;
     bool hasPrevFrame = false;
 
     Vec3 getKeypoint3D(const DetectedPerson& person, int idx) {
@@ -167,7 +168,11 @@ SkeletonFrame SkeletonMapper::mapToSkeleton(const DetectedPerson& person,
 
     // Compute velocities from previous frame
     if (impl_->hasPrevFrame) {
-        float dt = 1.0f / 30.0f; // Assume 30fps; would use real dt if available
+        // Compute dt from timestamps; fall back to config FPS
+        float dt = (timestamp > 0 && impl_->prevTimestamp > 0)
+            ? static_cast<float>(timestamp - impl_->prevTimestamp)
+            : (1.0f / impl_->config.fps);
+        if (dt < 1e-6f) dt = 1.0f / impl_->config.fps;
         frame.rootVelocity = (frame.rootPosition - impl_->prevRootPos) / dt;
 
         // Angular velocity from quaternion difference
@@ -180,12 +185,43 @@ SkeletonFrame SkeletonMapper::mapToSkeleton(const DetectedPerson& person,
 
     impl_->prevRootPos = frame.rootPosition;
     impl_->prevRootRot = frame.rootRotation;
+    impl_->prevTimestamp = timestamp;
     impl_->hasPrevFrame = true;
 
-    // Set confidence per joint based on source keypoints
+    // Set world positions
     for (int j = 0; j < JOINT_COUNT; ++j) {
         frame.joints[j].worldPosition = worldPositions[j];
     }
+
+    // Propagate COCO keypoint confidence to game skeleton joints
+    auto cocoConf = [&](int idx) { return impl_->getConfidence(person, idx); };
+    frame.joints[static_cast<int>(Joint::Hips)].confidence =
+        std::min(cocoConf(COCO_LEFT_HIP), cocoConf(COCO_RIGHT_HIP));
+    frame.joints[static_cast<int>(Joint::Spine)].confidence =
+        frame.joints[static_cast<int>(Joint::Hips)].confidence;
+    frame.joints[static_cast<int>(Joint::Spine1)].confidence =
+        frame.joints[static_cast<int>(Joint::Hips)].confidence;
+    frame.joints[static_cast<int>(Joint::Spine2)].confidence =
+        std::min(cocoConf(COCO_LEFT_SHOULDER), cocoConf(COCO_RIGHT_SHOULDER));
+    frame.joints[static_cast<int>(Joint::Neck)].confidence =
+        frame.joints[static_cast<int>(Joint::Spine2)].confidence;
+    frame.joints[static_cast<int>(Joint::Head)].confidence = cocoConf(COCO_NOSE);
+    frame.joints[static_cast<int>(Joint::LeftShoulder)].confidence = cocoConf(COCO_LEFT_SHOULDER);
+    frame.joints[static_cast<int>(Joint::LeftArm)].confidence = cocoConf(COCO_LEFT_SHOULDER);
+    frame.joints[static_cast<int>(Joint::LeftForeArm)].confidence = cocoConf(COCO_LEFT_ELBOW);
+    frame.joints[static_cast<int>(Joint::LeftHand)].confidence = cocoConf(COCO_LEFT_WRIST);
+    frame.joints[static_cast<int>(Joint::RightShoulder)].confidence = cocoConf(COCO_RIGHT_SHOULDER);
+    frame.joints[static_cast<int>(Joint::RightArm)].confidence = cocoConf(COCO_RIGHT_SHOULDER);
+    frame.joints[static_cast<int>(Joint::RightForeArm)].confidence = cocoConf(COCO_RIGHT_ELBOW);
+    frame.joints[static_cast<int>(Joint::RightHand)].confidence = cocoConf(COCO_RIGHT_WRIST);
+    frame.joints[static_cast<int>(Joint::LeftUpLeg)].confidence = cocoConf(COCO_LEFT_HIP);
+    frame.joints[static_cast<int>(Joint::LeftLeg)].confidence = cocoConf(COCO_LEFT_KNEE);
+    frame.joints[static_cast<int>(Joint::LeftFoot)].confidence = cocoConf(COCO_LEFT_ANKLE);
+    frame.joints[static_cast<int>(Joint::LeftToeBase)].confidence = cocoConf(COCO_LEFT_ANKLE);
+    frame.joints[static_cast<int>(Joint::RightUpLeg)].confidence = cocoConf(COCO_RIGHT_HIP);
+    frame.joints[static_cast<int>(Joint::RightLeg)].confidence = cocoConf(COCO_RIGHT_KNEE);
+    frame.joints[static_cast<int>(Joint::RightFoot)].confidence = cocoConf(COCO_RIGHT_ANKLE);
+    frame.joints[static_cast<int>(Joint::RightToeBase)].confidence = cocoConf(COCO_RIGHT_ANKLE);
 
     // Fill 6D and Euler representations
     RotationSolver::fillRotationRepresentations(frame.joints);

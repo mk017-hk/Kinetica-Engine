@@ -192,21 +192,34 @@ std::vector<AnimClip> Pipeline::buildClips(
             impl_->lastStats.trajectoryMs += trajMs;
         }
 
+        // Step 7: Fingerprinting
+        if (impl_->config.enableFingerprinting && !clip.frames.empty()) {
+            double fpMs = 0;
+            {
+                ScopedTimer t(fpMs);
+                impl_->fingerprinter.compute(clip);
+            }
+            impl_->lastStats.fingerprintMs += fpMs;
+        }
+
         clips.push_back(std::move(clip));
     }
 
-    // Optionally split by segment
+    // Optionally split by segment — replaces original clips with sub-clips
     if (impl_->config.splitBySegment) {
         std::vector<AnimClip> splitClips;
         for (const auto& clip : clips) {
             auto split = xport::AnimClipUtils::splitBySegments(clip);
-            for (auto& s : split) {
-                splitClips.push_back(std::move(s));
+            if (split.empty()) {
+                // No segments to split on — keep the original clip
+                splitClips.push_back(clip);
+            } else {
+                for (auto& s : split) {
+                    splitClips.push_back(std::move(s));
+                }
             }
         }
-        if (!splitClips.empty()) {
-            clips.insert(clips.end(), splitClips.begin(), splitClips.end());
-        }
+        clips = std::move(splitClips);
     }
 
     // Step 7: Motion clustering (across all clips)
@@ -267,7 +280,8 @@ std::vector<AnimClip> Pipeline::processVideo(
         exportClips(clips, impl_->config.outputDirectory);
     }
 
-    // Log summary stats (totalMs is written by totalTimer destructor after return)
+    // Log summary stats — use elapsedMs() while timer is still alive
+    double elapsedTotal = totalTimer.elapsedMs();
     std::ostringstream ss;
     ss << "Pipeline complete: "
        << impl_->lastStats.totalFramesProcessed << " frames, "
@@ -284,7 +298,7 @@ std::vector<AnimClip> Pipeline::processVideo(
        << "fingerprint=" << static_cast<int>(impl_->lastStats.fingerprintMs) << "ms, "
        << "clustering=" << static_cast<int>(impl_->lastStats.clusteringMs) << "ms, "
        << "export=" << static_cast<int>(impl_->lastStats.exportMs) << "ms, "
-       << "elapsed=" << static_cast<int>(totalTimer.elapsedMs()) << "ms";
+       << "elapsed=" << static_cast<int>(elapsedTotal) << "ms";
     HM_LOG_INFO(TAG, ss.str());
 
     if (callback) callback(100.0f, "Complete");

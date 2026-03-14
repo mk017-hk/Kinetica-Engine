@@ -18,10 +18,10 @@ AnimClip AnimClipUtils::subClip(const AnimClip& clip, int startFrame, int endFra
     startFrame = std::max(0, startFrame);
     endFrame = std::min(static_cast<int>(clip.frames.size()) - 1, endFrame);
 
+    result.frames.reserve(endFrame - startFrame + 1);
     for (int f = startFrame; f <= endFrame; ++f) {
-        auto frame = clip.frames[f];
-        frame.frameIndex = f - startFrame;
-        result.frames.push_back(frame);
+        result.frames.push_back(clip.frames[f]);
+        result.frames.back().frameIndex = f - startFrame;
     }
 
     // Include overlapping segments
@@ -58,12 +58,15 @@ AnimClip AnimClipUtils::concatenate(const std::vector<AnimClip>& clips) {
     result.fps = clips[0].fps;
     result.trackingID = clips[0].trackingID;
 
+    size_t totalFrames = 0;
+    for (const auto& clip : clips) totalFrames += clip.frames.size();
+    result.frames.reserve(totalFrames);
+
     int frameOffset = 0;
     for (const auto& clip : clips) {
         for (const auto& frame : clip.frames) {
-            auto newFrame = frame;
-            newFrame.frameIndex = frameOffset + frame.frameIndex;
-            result.frames.push_back(newFrame);
+            result.frames.push_back(frame);
+            result.frames.back().frameIndex = frameOffset + frame.frameIndex;
         }
 
         for (const auto& seg : clip.segments) {
@@ -89,6 +92,8 @@ AnimClip AnimClipUtils::resample(const AnimClip& clip, float targetFPS) {
 
     float duration = static_cast<float>(clip.frames.size() - 1) / clip.fps;
     int newNumFrames = static_cast<int>(duration * targetFPS) + 1;
+
+    result.frames.reserve(newNumFrames);
 
     for (int f = 0; f < newNumFrames; ++f) {
         float targetTime = f / targetFPS;

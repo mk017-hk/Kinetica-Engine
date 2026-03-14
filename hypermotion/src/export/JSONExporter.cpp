@@ -141,6 +141,11 @@ bool JSONExporter::exportToFile(const AnimClip& clip, const std::string& path) {
     }
 
     ofs << content;
+    ofs.flush();
+    if (ofs.fail()) {
+        HM_LOG_ERROR(TAG, "Write failed for: " + path);
+        return false;
+    }
     HM_LOG_INFO(TAG, "Exported JSON to: " + path);
     return true;
 }
@@ -164,6 +169,12 @@ bool JSONExporter::exportBatchToFile(const std::vector<AnimClip>& clips, const s
         ofs << j.dump(2);
     } else {
         ofs << j.dump();
+    }
+
+    ofs.flush();
+    if (ofs.fail()) {
+        HM_LOG_ERROR(TAG, "Write failed for: " + path);
+        return false;
     }
 
     HM_LOG_INFO(TAG, "Exported " + std::to_string(clips.size()) + " clips to: " + path);
@@ -222,7 +233,8 @@ bool JSONExporter::exportWithStyle(const AnimClip& clip, const PlayerStyle& styl
     std::ofstream ofs(path);
     if (!ofs.is_open()) return false;
     ofs << content;
-    return true;
+    ofs.flush();
+    return !ofs.fail();
 }
 
 std::string JSONExporter::exportWithStyleToString(const AnimClip& clip, const PlayerStyle& style) {

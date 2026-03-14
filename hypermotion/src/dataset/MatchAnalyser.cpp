@@ -261,6 +261,14 @@ MatchAnalysisResult MatchAnalyser::processMatch(
         // Classify accepted clips
         auto classifications = impl_->classifier.classifyBatch(filtered.accepted);
 
+        // Build index of metadata by clip index for this player
+        std::unordered_map<size_t, size_t> metaIndexByClipIdx;
+        for (size_t k = 0; k < extraction.metadata.size(); ++k) {
+            if (extraction.metadata[k].playerID == pd.playerID) {
+                metaIndexByClipIdx[k] = k;
+            }
+        }
+
         // Build database entries
         for (size_t j = 0; j < filtered.accepted.size(); ++j) {
             AnimationEntry entry;
@@ -268,18 +276,12 @@ MatchAnalysisResult MatchAnalyser::processMatch(
             entry.quality = filtered.acceptedResults[j];
             entry.classification = classifications[j];
 
-            // Find matching metadata
-            // Search original extraction metadata by clip name
-            for (size_t k = 0; k < extraction.clips.size(); ++k) {
-                if (k < extraction.metadata.size()) {
-                    auto& meta = extraction.metadata[k];
-                    if (meta.playerID == pd.playerID) {
-                        entry.clipMeta = meta;
-                        entry.clipMeta.motionType = classifications[j].label;
-                        entry.clipMeta.confidence = classifications[j].confidence;
-                        break;
-                    }
-                }
+            // Find matching metadata from pre-built index
+            for (const auto& [clipIdx, metaIdx] : metaIndexByClipIdx) {
+                entry.clipMeta = extraction.metadata[metaIdx];
+                entry.clipMeta.motionType = classifications[j].label;
+                entry.clipMeta.confidence = classifications[j].confidence;
+                break;
             }
 
             // Attach foot contacts for the clip's frame range

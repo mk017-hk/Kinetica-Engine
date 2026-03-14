@@ -37,6 +37,10 @@ bool MotionClassifier::initialize() {
     return impl_->initialized;
 }
 
+bool MotionClassifier::isInitialized() const {
+    return impl_->initialized;
+}
+
 ClassificationResult MotionClassifier::classify(const AnimClip& clip) {
     ClassificationResult result;
 

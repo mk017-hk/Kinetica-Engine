@@ -7,6 +7,8 @@
 #include "HyperMotion/segmenter/MotionSegmenter.h"
 #include "HyperMotion/motion/FootContactDetector.h"
 #include "HyperMotion/motion/TrajectoryExtractor.h"
+#include "HyperMotion/motion/CanonicalMotionBuilder.h"
+#include "HyperMotion/analysis/MotionFingerprint.h"
 #include "HyperMotion/export/BVHExporter.h"
 #include "HyperMotion/export/JSONExporter.h"
 
@@ -73,6 +75,12 @@ public:
         return static_cast<int>(queue_.size());
     }
 
+    void reset() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.clear();
+        done_ = false;
+    }
+
 private:
     int capacity_;
     std::deque<T> queue_;
@@ -99,6 +107,8 @@ struct StreamingPipeline::Impl {
     segmenter::MotionSegmenter motionSegmenter;
     motion::FootContactDetector footContactDetector;
     motion::TrajectoryExtractor trajectoryExtractor;
+    motion::CanonicalMotionBuilder canonicalBuilder;
+    analysis::MotionFingerprint fingerprinter;
 
     // Queues
     std::unique_ptr<BoundedQueue<DecodedFrame>> frameQueue;
@@ -126,7 +136,9 @@ struct StreamingPipeline::Impl {
         , signalPipeline(cfg.pipelineConfig.signalConfig)
         , motionSegmenter(cfg.pipelineConfig.segmenterConfig)
         , footContactDetector(cfg.pipelineConfig.footContactConfig)
-        , trajectoryExtractor(cfg.pipelineConfig.trajectoryConfig) {
+        , trajectoryExtractor(cfg.pipelineConfig.trajectoryConfig)
+        , canonicalBuilder(cfg.pipelineConfig.canonicalConfig)
+        , fingerprinter(cfg.pipelineConfig.fingerprintConfig) {
 
         pose::PoseBatchProcessorConfig batchCfg;
         batchCfg.estimatorConfig.detector = cfg.pipelineConfig.poseConfig.detector;
@@ -184,6 +196,21 @@ bool StreamingPipeline::startProcessing(
     if (!impl_->initialized) {
         HM_LOG_ERROR(TAG, "Pipeline not initialized");
         return false;
+    }
+
+    // Join any previously running threads before starting new ones
+    if (impl_->decodeThread.joinable()) impl_->decodeThread.join();
+    if (impl_->inferenceThread.joinable()) impl_->inferenceThread.join();
+    if (impl_->analysisThread.joinable()) impl_->analysisThread.join();
+
+    // Reset queues for reuse
+    impl_->frameQueue->reset();
+    impl_->poseQueue->reset();
+
+    // Clear previous results
+    {
+        std::lock_guard<std::mutex> lock(impl_->clipsMutex);
+        impl_->completedClips.clear();
     }
 
     impl_->clipCallback = std::move(clipCallback);
@@ -304,17 +331,31 @@ bool StreamingPipeline::startProcessing(
             if (static_cast<int>(skeletonFrames.size()) < minFrames) continue;
 
             impl_->signalPipeline.process(skeletonFrames);
-            auto segments = impl_->motionSegmenter.segment(skeletonFrames, personID);
 
             AnimClip clip;
             clip.name = "player_" + std::to_string(personID);
             clip.fps = impl_->config.pipelineConfig.targetFPS;
             clip.trackingID = personID;
             clip.frames = std::move(skeletonFrames);
+
+            // Canonical motion (stabilise limbs, extract root motion)
+            if (impl_->config.pipelineConfig.enableCanonicalMotion) {
+                impl_->canonicalBuilder.process(clip);
+            }
+
+            auto segments = impl_->motionSegmenter.segment(clip.frames, personID);
             clip.segments = std::move(segments);
 
             impl_->footContactDetector.process(clip);
-            impl_->trajectoryExtractor.process(clip);
+
+            if (impl_->config.pipelineConfig.enableTrajectoryExtraction) {
+                impl_->trajectoryExtractor.process(clip);
+            }
+
+            // Motion fingerprinting
+            if (impl_->config.pipelineConfig.enableFingerprinting && !clip.frames.empty()) {
+                impl_->fingerprinter.compute(clip);
+            }
 
             if (impl_->clipCallback) {
                 impl_->clipCallback(clip, personID);

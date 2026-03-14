@@ -19,7 +19,7 @@
 | Motion clustering | K-means++ grouping by motion features | Done |
 | Streaming pipeline | Async 3-stage decode→inference→analysis | Done |
 | Full match analyser | kinetica_analyse_match CLI tool with end-to-end pipeline | Done |
-| Unit tests | 216+ tests pass via `ctest` | Done |
+| Unit tests | 222+ tests pass via `ctest` | Done |
 | CI pipeline | GitHub Actions builds on Ubuntu, runs tests and demo | Done |
 
 ## Phase 2: ML Integration

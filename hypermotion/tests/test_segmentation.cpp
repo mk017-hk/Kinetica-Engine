@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "HyperMotion/segmenter/MotionSegmenter.h"
+#include "HyperMotion/segmenter/MotionFeatureExtractor.h"
 #include "test_helpers.h"
 #include <cmath>
 
@@ -173,4 +174,77 @@ TEST(MotionSegmenterTest, TrackingIDPropagated) {
     for (const auto& seg : segments) {
         EXPECT_EQ(seg.trackingID, 42);
     }
+}
+
+// -------------------------------------------------------------------
+// Heuristic classifier tests (MotionFeatureExtractor)
+// -------------------------------------------------------------------
+
+TEST(MotionFeatureExtractorTest, ClassifiesIdleCorrectly) {
+    MotionFeatureExtractor extractor;
+    // Create still frames (near-zero velocity)
+    std::vector<SkeletonFrame> frames(30);
+    for (int i = 0; i < 30; ++i) {
+        frames[i] = test::makeIdentityFrame({0, 90, 0}, i, i / 30.0);
+        frames[i].rootVelocity = {0, 0, 0};
+    }
+    auto type = extractor.classifyHeuristic(frames, 0, 30);
+    EXPECT_EQ(type, MotionType::Idle);
+}
+
+TEST(MotionFeatureExtractorTest, ClassifiesWalkCorrectly) {
+    MotionFeatureExtractor extractor;
+    auto frames = test::makeWalkingSequence(30, 80.0f); // 80 cm/s = walking
+    auto type = extractor.classifyHeuristic(frames, 0, 30);
+    EXPECT_EQ(type, MotionType::Walk);
+}
+
+TEST(MotionFeatureExtractorTest, ClassifiesSprintCorrectly) {
+    MotionFeatureExtractor extractor;
+    std::vector<SkeletonFrame> frames(30);
+    for (int i = 0; i < 30; ++i) {
+        frames[i] = test::makeIdentityFrame({0, 88, static_cast<float>(i * 16)}, i, i / 30.0);
+        frames[i].rootVelocity = {0, 0, 500.0f}; // 500 cm/s = sprint
+    }
+    auto type = extractor.classifyHeuristic(frames, 0, 30);
+    EXPECT_EQ(type, MotionType::Sprint);
+}
+
+TEST(MotionFeatureExtractorTest, ClassifiesTurnLeftCorrectly) {
+    MotionFeatureExtractor extractor;
+    std::vector<SkeletonFrame> frames(30);
+    for (int i = 0; i < 30; ++i) {
+        frames[i] = test::makeIdentityFrame({0, 90, 0}, i, i / 30.0);
+        frames[i].rootVelocity = {50, 0, 50};
+        frames[i].rootAngularVel = {0, 120, 0}; // positive yaw = turn left
+    }
+    auto type = extractor.classifyHeuristic(frames, 0, 30);
+    EXPECT_EQ(type, MotionType::TurnLeft);
+}
+
+TEST(MotionFeatureExtractorTest, ClassifiesTurnRightCorrectly) {
+    MotionFeatureExtractor extractor;
+    std::vector<SkeletonFrame> frames(30);
+    for (int i = 0; i < 30; ++i) {
+        frames[i] = test::makeIdentityFrame({0, 90, 0}, i, i / 30.0);
+        frames[i].rootVelocity = {50, 0, 50};
+        frames[i].rootAngularVel = {0, -120, 0}; // negative yaw = turn right
+    }
+    auto type = extractor.classifyHeuristic(frames, 0, 30);
+    EXPECT_EQ(type, MotionType::TurnRight);
+}
+
+TEST(MotionFeatureExtractorTest, ClassifiesJumpWhenVerticalDisplacement) {
+    MotionFeatureExtractor extractor;
+    std::vector<SkeletonFrame> frames(30);
+    for (int i = 0; i < 30; ++i) {
+        float t = static_cast<float>(i) / 30.0f;
+        // Parabolic jump: height goes from 90 to ~120 and back
+        float height = 90.0f + 60.0f * std::sin(t * 3.14159f);
+        float vy = 60.0f * 3.14159f * std::cos(t * 3.14159f);
+        frames[i] = test::makeIdentityFrame({0, height, static_cast<float>(i)}, i, i / 30.0);
+        frames[i].rootVelocity = {0, vy, 30.0f};
+    }
+    auto type = extractor.classifyHeuristic(frames, 0, 30);
+    EXPECT_EQ(type, MotionType::Jump);
 }

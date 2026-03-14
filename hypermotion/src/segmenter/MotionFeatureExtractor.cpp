@@ -168,12 +168,20 @@ MotionType MotionFeatureExtractor::classifyHeuristic(
     float maxSpeed = 0.0f;
     float totalAcceleration = 0.0f;
     float prevSpeed = 0.0f;
+    float totalVerticalVel = 0.0f;
+    float maxHeight = 0.0f;
+    float minHeight = std::numeric_limits<float>::max();
+    float totalLateralVel = 0.0f;
 
     for (int f = startFrame; f < endFrame && f < static_cast<int>(frames.size()); ++f) {
         float speed = frames[f].rootVelocity.length();
         totalSpeed += speed;
         maxSpeed = std::max(maxSpeed, speed);
         totalAngularVel += frames[f].rootAngularVel.length();
+        totalVerticalVel += std::abs(frames[f].rootVelocity.y);
+        totalLateralVel += std::abs(frames[f].rootVelocity.x);
+        maxHeight = std::max(maxHeight, frames[f].rootPosition.y);
+        minHeight = std::min(minHeight, frames[f].rootPosition.y);
 
         if (f > startFrame) {
             totalAcceleration += speed - prevSpeed;
@@ -184,20 +192,44 @@ MotionType MotionFeatureExtractor::classifyHeuristic(
     float avgSpeed = totalSpeed / count;
     float avgAngularVel = totalAngularVel / count;
     float avgAcceleration = count > 1 ? totalAcceleration / (count - 1) : 0.0f;
+    float avgVerticalVel = totalVerticalVel / count;
+    float avgLateralVel = totalLateralVel / count;
+    float heightRange = maxHeight - minHeight;
 
     // Check body part activity
     auto bodyStats = computeBodyPartStats(frames, startFrame, endFrame);
     float legActivity = (bodyStats.leftLegVelocity + bodyStats.rightLegVelocity) * 0.5f;
     float armActivity = (bodyStats.leftArmVelocity + bodyStats.rightArmVelocity) * 0.5f;
+    float legAsymmetry = std::abs(bodyStats.leftLegVelocity - bodyStats.rightLegVelocity);
+    float armAsymmetry = std::abs(bodyStats.leftArmVelocity - bodyStats.rightArmVelocity);
 
-    // Classify based on speed/acceleration/angular velocity thresholds
-    // Speed thresholds (cm/s): Idle<10, Walk<120, Jog<250, Run<450, Sprint>450
+    // --- Classify based on multi-feature analysis ---
 
     if (avgSpeed < 10.0f) return MotionType::Idle;
 
-    // High angular velocity => turning
+    // Jump: significant vertical displacement or upward velocity
+    if (heightRange > 15.0f && avgVerticalVel > 30.0f) {
+        return MotionType::Jump;
+    }
+
+    // Slide: high lateral velocity relative to forward, low height
+    if (avgLateralVel > 100.0f && avgLateralVel > avgSpeed * 0.6f) {
+        return MotionType::Slide;
+    }
+
+    // Tackle: high leg asymmetry with forward velocity and body lowering
+    if (legAsymmetry > 20.0f && legActivity > 25.0f && avgSpeed > 100.0f && heightRange > 10.0f) {
+        return MotionType::Tackle;
+    }
+
+    // High angular velocity => turning (distinguish left/right by yaw direction)
     if (avgAngularVel > 90.0f && avgSpeed > 10.0f) {
-        return MotionType::TurnLeft;  // We can't distinguish L/R without direction info
+        // Accumulate signed angular velocity around Y axis to determine turn direction
+        float totalYaw = 0.0f;
+        for (int f = startFrame; f < endFrame && f < static_cast<int>(frames.size()); ++f) {
+            totalYaw += frames[f].rootAngularVel.y;
+        }
+        return totalYaw > 0.0f ? MotionType::TurnLeft : MotionType::TurnRight;
     }
 
     // Strong deceleration from high speed
@@ -205,22 +237,35 @@ MotionType MotionFeatureExtractor::classifyHeuristic(
         return MotionType::Decelerate;
     }
 
-    // Detect special actions: high leg activity with low root speed suggests kick/tackle
-    if (legActivity > 30.0f && avgSpeed < 100.0f) {
-        // Asymmetric leg activity => kick
-        float legAsymmetry = std::abs(bodyStats.leftLegVelocity - bodyStats.rightLegVelocity);
-        if (legAsymmetry > 15.0f) return MotionType::Kick;
+    // Kick: high leg asymmetry with low root speed, one leg swinging hard
+    if (legActivity > 30.0f && avgSpeed < 100.0f && legAsymmetry > 15.0f) {
+        return MotionType::Kick;
     }
 
-    // Low leg activity, some arm activity => could be shielding or receiving
+    // Shield: arms spread wide, low speed, torso facing opponent direction
+    if (armActivity > 25.0f && armAsymmetry < 8.0f && legActivity < 10.0f && avgSpeed < 80.0f) {
+        return MotionType::Shield;
+    }
+
+    // Receive: some arm activity (ball control), low leg activity, low speed
     if (armActivity > 20.0f && legActivity < 5.0f && avgSpeed < 50.0f) {
         return MotionType::Receive;
     }
 
-    // Speed-based classification
+    // Celebrate: high arm activity with moderate or low speed
+    if (armActivity > 35.0f && avgSpeed < 150.0f && legActivity < 15.0f) {
+        return MotionType::Celebrate;
+    }
+
+    // Goalkeeper: high arm ROM, wide stance, low forward speed
+    if (bodyStats.leftArmROM > 40.0f && bodyStats.rightArmROM > 40.0f &&
+        avgSpeed < 100.0f && legActivity > 10.0f) {
+        return MotionType::Goalkeeper;
+    }
+
+    // Speed-based locomotion classification
     if (avgSpeed < 120.0f) return MotionType::Walk;
     if (avgSpeed < 250.0f) return MotionType::Jog;
-    if (avgSpeed < 450.0f) return MotionType::Sprint;  // Run maps to Sprint for simplicity
     return MotionType::Sprint;
 }
 

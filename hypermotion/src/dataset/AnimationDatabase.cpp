@@ -78,20 +78,29 @@ int AnimationDatabase::exportToDirectory(const std::string& rootDir,
                                           bool exportBVH,
                                           bool exportJSON) const {
     namespace fs = std::filesystem;
-    fs::create_directories(rootDir);
+
+    std::error_code ec;
+    fs::create_directories(rootDir, ec);
+    if (ec) {
+        HM_LOG_ERROR(TAG, "Cannot create output directory: " + rootDir + " (" + ec.message() + ")");
+        return 0;
+    }
 
     // Create subdirectories for each motion type
     for (int i = 0; i < MOTION_TYPE_COUNT; ++i) {
         std::string typeName = MOTION_TYPE_NAMES[i];
-        // Lowercase the type name
         for (auto& c : typeName) c = static_cast<char>(std::tolower(c));
-        fs::create_directories(rootDir + "/" + typeName);
+        fs::create_directories(rootDir + "/" + typeName, ec);
+        if (ec) {
+            HM_LOG_WARN(TAG, "Cannot create subdirectory: " + typeName + " (" + ec.message() + ")");
+        }
     }
 
     xport::BVHExporter bvhExporter;
     xport::JSONExporter jsonExporter;
 
     int exported = 0;
+    int failed = 0;
     for (size_t i = 0; i < impl_->entries.size(); ++i) {
         const auto& entry = impl_->entries[i];
         int typeIdx = static_cast<int>(entry.classification.type);
@@ -103,11 +112,19 @@ int AnimationDatabase::exportToDirectory(const std::string& rootDir,
         oss << "clip_" << std::setw(4) << std::setfill('0') << i;
         std::string basePath = rootDir + "/" + typeName + "/" + oss.str();
 
+        bool clipOk = true;
+
         if (exportBVH) {
-            bvhExporter.exportToFile(entry.clip, basePath + ".bvh");
+            if (!bvhExporter.exportToFile(entry.clip, basePath + ".bvh")) {
+                HM_LOG_WARN(TAG, "BVH export failed for clip " + std::to_string(i));
+                clipOk = false;
+            }
         }
         if (exportJSON) {
-            jsonExporter.exportToFile(entry.clip, basePath + ".json");
+            if (!jsonExporter.exportToFile(entry.clip, basePath + ".json")) {
+                HM_LOG_WARN(TAG, "JSON export failed for clip " + std::to_string(i));
+                clipOk = false;
+            }
         }
 
         // Write clip metadata
@@ -143,12 +160,28 @@ int AnimationDatabase::exportToDirectory(const std::string& rootDir,
         std::ofstream metaFile(basePath + ".meta.json");
         if (metaFile.is_open()) {
             metaFile << meta.dump(2) << "\n";
+            metaFile.flush();
+            if (metaFile.fail()) {
+                HM_LOG_WARN(TAG, "Metadata write failed for clip " + std::to_string(i));
+                clipOk = false;
+            }
+        } else {
+            HM_LOG_WARN(TAG, "Cannot open metadata file: " + basePath + ".meta.json");
+            clipOk = false;
         }
 
-        exported++;
+        if (clipOk) {
+            exported++;
+        } else {
+            failed++;
+        }
     }
 
-    HM_LOG_INFO(TAG, "Exported " + std::to_string(exported) + " clips to: " + rootDir);
+    if (failed > 0) {
+        HM_LOG_WARN(TAG, "Export completed with " + std::to_string(failed) + " failures");
+    }
+    HM_LOG_INFO(TAG, "Exported " + std::to_string(exported) + "/" +
+                std::to_string(impl_->entries.size()) + " clips to: " + rootDir);
     return exported;
 }
 
@@ -181,6 +214,11 @@ bool AnimationDatabase::saveSummary(const std::string& path) const {
         return false;
     }
     ofs << exportSummaryJSON() << "\n";
+    ofs.flush();
+    if (ofs.fail()) {
+        HM_LOG_ERROR(TAG, "Failed to write summary to: " + path);
+        return false;
+    }
     return true;
 }
 

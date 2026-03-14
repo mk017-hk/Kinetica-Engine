@@ -187,6 +187,12 @@ if(HM_USE_TENSORRT)
         PATHS "${TENSORRT_ROOT}/lib"
               "/usr/local/lib"
               "/usr/lib/x86_64-linux-gnu")
+    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIB OR NOT TENSORRT_ONNXPARSER_LIB)
+        message(WARNING "TensorRT requested but not all components found — disabling TensorRT")
+        set(HM_USE_TENSORRT OFF)
+    else()
+        message(STATUS "TensorRT found")
+    endif()
 endif()
 
 # -------------------------------------------------------------------

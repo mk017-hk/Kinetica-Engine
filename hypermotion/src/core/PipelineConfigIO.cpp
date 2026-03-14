@@ -33,6 +33,11 @@ static void parseFromJson(const json& root, PipelineConfig& cfg) {
     readOpt(root, "outputFormat", cfg.outputFormat);
     readOpt(root, "minTrackFrames", cfg.minTrackFrames);
     readOpt(root, "enableVisualization", cfg.enableVisualization);
+    readOpt(root, "enableCanonicalMotion", cfg.enableCanonicalMotion);
+    readOpt(root, "enableTrajectoryExtraction", cfg.enableTrajectoryExtraction);
+    readOpt(root, "enableFingerprinting", cfg.enableFingerprinting);
+    readOpt(root, "enableFootContactDetection", cfg.enableFootContactDetection);
+    readOpt(root, "enableMotionClustering", cfg.enableMotionClustering);
 
     // Pose estimation
     if (root.contains("pose")) {
@@ -154,6 +159,11 @@ static json toJson(const PipelineConfig& cfg) {
     root["outputFormat"] = cfg.outputFormat;
     root["minTrackFrames"] = cfg.minTrackFrames;
     root["enableVisualization"] = cfg.enableVisualization;
+    root["enableCanonicalMotion"] = cfg.enableCanonicalMotion;
+    root["enableTrajectoryExtraction"] = cfg.enableTrajectoryExtraction;
+    root["enableFingerprinting"] = cfg.enableFingerprinting;
+    root["enableFootContactDetection"] = cfg.enableFootContactDetection;
+    root["enableMotionClustering"] = cfg.enableMotionClustering;
 
     // Pose
     json pose;
@@ -293,6 +303,11 @@ bool savePipelineConfig(const std::string& path, const PipelineConfig& config) {
         return false;
     }
     ofs << toJson(config).dump(2) << "\n";
+    ofs.flush();
+    if (ofs.fail()) {
+        HM_LOG_ERROR(TAG, "Failed to write config file: " + path);
+        return false;
+    }
     HM_LOG_INFO(TAG, "Saved config to: " + path);
     return true;
 }
@@ -328,6 +343,11 @@ bool savePipelineStats(const std::string& path, const PipelineStats& stats) {
         return false;
     }
     ofs << serialisePipelineStats(stats) << "\n";
+    ofs.flush();
+    if (ofs.fail()) {
+        HM_LOG_ERROR(TAG, "Failed to write stats file: " + path);
+        return false;
+    }
     HM_LOG_INFO(TAG, "Saved stats to: " + path);
     return true;
 }

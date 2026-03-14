@@ -75,10 +75,11 @@ struct ClipExtractor::Impl {
         clip.fps = config.fps;
         clip.trackingID = playerID;
 
-        for (int i = start; i <= end && i < static_cast<int>(frames.size()); ++i) {
-            SkeletonFrame f = frames[i];
-            f.frameIndex = i - start;
-            clip.frames.push_back(f);
+        int actualEnd = std::min(end, static_cast<int>(frames.size()) - 1);
+        clip.frames.reserve(actualEnd - start + 1);
+        for (int i = start; i <= actualEnd; ++i) {
+            clip.frames.push_back(frames[i]);
+            clip.frames.back().frameIndex = i - start;
         }
         return clip;
     }

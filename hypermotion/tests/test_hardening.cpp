@@ -7,6 +7,7 @@
 #include "HyperMotion/dataset/ClipQualityFilter.h"
 #include "HyperMotion/dataset/AnimationDatabase.h"
 #include "HyperMotion/dataset/MatchAnalyser.h"
+#include "HyperMotion/dataset/MotionClassifier.h"
 #include "HyperMotion/analysis/MotionFingerprint.h"
 #include "HyperMotion/signal/SignalPipeline.h"
 #include "HyperMotion/skeleton/SkeletonMapper.h"
@@ -812,4 +813,103 @@ TEST(HardeningPipelineParity, SegmentsFoundTrackedInStats) {
         << "Segment count should be tracked";
     EXPECT_GE(stats.segmentsFound, 2)
         << "Multi-phase sequence should produce multiple segments";
+}
+
+// ===================================================================
+// L. Export Robustness
+// ===================================================================
+
+TEST(HardeningExportRobustness, AnimDatabaseDetectsExportFailures) {
+    // Verify that exportToDirectory returns correct count and creates valid files
+    AnimationDatabase db;
+
+    AnimationEntry entry;
+    entry.clip = test::makeTestClip(30, 30.0f, "robust_test");
+    entry.clipMeta.playerID = 1;
+    entry.clipMeta.durationSec = 1.0f;
+    entry.classification.type = MotionType::Walk;
+    entry.classification.label = "walk";
+    entry.classification.confidence = 0.9f;
+    entry.quality.overallScore = 0.85f;
+    db.addEntry(std::move(entry));
+
+    std::string testDir = "/tmp/hm_robustness_test_" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    int exported = db.exportToDirectory(testDir, true, true);
+    EXPECT_EQ(exported, 1);
+
+    // Verify metadata file is well-formed JSON
+    std::ifstream metaFile(testDir + "/walk/clip_0000.meta.json");
+    ASSERT_TRUE(metaFile.is_open());
+    std::string metaContent((std::istreambuf_iterator<char>(metaFile)),
+                             std::istreambuf_iterator<char>());
+    EXPECT_FALSE(metaContent.empty());
+    EXPECT_NE(metaContent.find("\"playerID\""), std::string::npos);
+    EXPECT_NE(metaContent.find("\"qualityScore\""), std::string::npos);
+
+    // Verify BVH and JSON files exist and are non-empty
+    namespace fs = std::filesystem;
+    EXPECT_TRUE(fs::exists(testDir + "/walk/clip_0000.bvh"));
+    EXPECT_TRUE(fs::exists(testDir + "/walk/clip_0000.json"));
+    EXPECT_GT(fs::file_size(testDir + "/walk/clip_0000.bvh"), 0u);
+    EXPECT_GT(fs::file_size(testDir + "/walk/clip_0000.json"), 0u);
+
+    // Summary save should succeed
+    EXPECT_TRUE(db.saveSummary(testDir + "/summary.json"));
+    EXPECT_TRUE(fs::exists(testDir + "/summary.json"));
+    EXPECT_GT(fs::file_size(testDir + "/summary.json"), 0u);
+
+    fs::remove_all(testDir);
+}
+
+TEST(HardeningExportRobustness, SaveSummaryDetectsWriteFailure) {
+    AnimationDatabase db;
+    // Saving to a non-existent nested path should fail gracefully
+    bool result = db.saveSummary("/nonexistent_root_12345/deeply/nested/summary.json");
+    EXPECT_FALSE(result);
+}
+
+// ===================================================================
+// M. PipelineConfig Feature Flag Serialisation
+// ===================================================================
+
+TEST(HardeningConfigFlags, AllFeatureFlagsRoundTrip) {
+    PipelineConfig config;
+    config.enableCanonicalMotion = false;
+    config.enableTrajectoryExtraction = false;
+    config.enableFingerprinting = false;
+    config.enableFootContactDetection = false;
+    config.enableMotionClustering = false;
+
+    std::string json = serialisePipelineConfig(config);
+
+    // All flags should appear in serialised output
+    EXPECT_NE(json.find("enableCanonicalMotion"), std::string::npos);
+    EXPECT_NE(json.find("enableTrajectoryExtraction"), std::string::npos);
+    EXPECT_NE(json.find("enableFingerprinting"), std::string::npos);
+    EXPECT_NE(json.find("enableFootContactDetection"), std::string::npos);
+    EXPECT_NE(json.find("enableMotionClustering"), std::string::npos);
+
+    // Round-trip: parse back and verify values
+    PipelineConfig loaded;
+    ASSERT_TRUE(parsePipelineConfig(json, loaded));
+    EXPECT_FALSE(loaded.enableCanonicalMotion);
+    EXPECT_FALSE(loaded.enableTrajectoryExtraction);
+    EXPECT_FALSE(loaded.enableFingerprinting);
+    EXPECT_FALSE(loaded.enableFootContactDetection);
+    EXPECT_FALSE(loaded.enableMotionClustering);
+}
+
+// ===================================================================
+// N. MotionClassifier isInitialized
+// ===================================================================
+
+TEST(HardeningClassifier, IsInitializedReportsCorrectly) {
+    MotionClassifier classifier;
+    // Before initialize(), should not be initialized
+    EXPECT_FALSE(classifier.isInitialized());
+
+    classifier.initialize();
+    EXPECT_TRUE(classifier.isInitialized());
 }

@@ -30,6 +30,7 @@ public:
     MotionClassifier& operator=(MotionClassifier&&) noexcept;
 
     bool initialize();
+    bool isInitialized() const;
 
     /// Classify a single animation clip.
     ClassificationResult classify(const AnimClip& clip);

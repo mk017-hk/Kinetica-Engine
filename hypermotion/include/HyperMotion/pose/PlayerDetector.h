@@ -18,6 +18,13 @@ struct PlayerDetectorConfig {
     int maxDetections = 30;
     bool useTensorRT = false;
     std::string tensorrtCachePath;
+
+    /// Class index mapping from the model's output classes to our internal
+    /// 3-class system (player=0, referee=1, goalkeeper=2).
+    /// If empty, the detector auto-detects: for 80-class COCO models it maps
+    /// class 0 ("person") → player; for 3-class models it uses identity mapping.
+    /// Format: cocoClassID → internalClassID (-1 = ignore that class).
+    std::unordered_map<int, int> classMapping;
 };
 
 class PlayerDetector {

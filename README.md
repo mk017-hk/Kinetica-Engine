@@ -2,7 +2,7 @@
 
 **AI-powered video-to-animation pipeline for sports motion capture**
 
-HyperMotion converts broadcast football (soccer) footage into production-ready skeletal animation data. It detects players, estimates 2D/3D poses, maps them to a 22-joint game skeleton, applies signal processing, classifies motion types, and exports industry-standard BVH and JSON animation files.
+HyperMotion converts broadcast football footage into production-ready skeletal animation data. It detects players, estimates 2D/3D poses, maps them to a 22-joint game skeleton, applies signal processing, classifies motion types, and exports industry-standard BVH and JSON animation files.
 
 ## Architecture
 

@@ -9,14 +9,20 @@ namespace hm::pose {
 
 static constexpr const char* TAG = "PlayerDetector";
 
+// Internal class labels
+static constexpr int INTERNAL_NUM_CLASSES = 3;
+static constexpr const char* INTERNAL_CLASS_NAMES[] = {"player", "referee", "goalkeeper"};
+
 struct PlayerDetector::Impl {
     PlayerDetectorConfig config;
     cv::dnn::Net net;
     bool initialized = false;
 
-    // Class labels: 0=player, 1=referee, 2=goalkeeper
-    static constexpr int NUM_CLASSES = 3;
-    static constexpr const char* CLASS_NAMES[] = {"player", "referee", "goalkeeper"};
+    // Number of classes in the loaded model's output (detected at runtime)
+    int modelNumClasses = 0;
+
+    // Resolved class mapping: modelClassID → internalClassID (-1 = ignore)
+    std::vector<int> resolvedMapping;
 
     cv::Mat preprocess(const cv::Mat& frame) {
         cv::Mat blob;
@@ -26,38 +32,79 @@ struct PlayerDetector::Impl {
         return blob;
     }
 
+    void buildClassMapping(int numClasses) {
+        modelNumClasses = numClasses;
+        resolvedMapping.assign(numClasses, -1); // default: ignore all
+
+        if (!config.classMapping.empty()) {
+            // Use explicit mapping from config
+            for (const auto& [modelClass, internalClass] : config.classMapping) {
+                if (modelClass >= 0 && modelClass < numClasses &&
+                    internalClass >= -1 && internalClass < INTERNAL_NUM_CLASSES) {
+                    resolvedMapping[modelClass] = internalClass;
+                }
+            }
+            HM_LOG_INFO(TAG, "Using custom class mapping (" +
+                        std::to_string(config.classMapping.size()) + " entries)");
+        } else if (numClasses == INTERNAL_NUM_CLASSES) {
+            // 3-class model: identity mapping (player, referee, goalkeeper)
+            for (int i = 0; i < INTERNAL_NUM_CLASSES; ++i) {
+                resolvedMapping[i] = i;
+            }
+            HM_LOG_INFO(TAG, "3-class model detected — using identity mapping");
+        } else if (numClasses == 80 || numClasses == 91) {
+            // COCO model: map "person" (class 0) → player (internal 0)
+            resolvedMapping[0] = 0;
+            HM_LOG_INFO(TAG, std::to_string(numClasses) +
+                        "-class COCO model detected — mapping 'person' (0) → 'player'");
+        } else {
+            // Unknown model: map class 0 → player as best-effort fallback
+            resolvedMapping[0] = 0;
+            HM_LOG_WARN(TAG, "Unknown " + std::to_string(numClasses) +
+                        "-class model — mapping class 0 → 'player'");
+        }
+    }
+
     std::vector<Detection> postprocess(const cv::Mat& output, int origWidth, int origHeight) {
         std::vector<Detection> detections;
 
-        // YOLOv8 output shape: [1, 4+nclass, ndet] — need to transpose to [1, ndet, 4+nclass]
+        // YOLOv8 output shape: [1, 4+nclass, ndet] — need to transpose to [ndet, 4+nclass]
         int rows = output.size[1];
         int cols = output.size[2];
 
-        // Determine if we need to transpose
         cv::Mat data;
-        if (rows == (4 + NUM_CLASSES) && cols > rows) {
+        int numClasses;
+
+        if (cols > rows) {
             // Shape is [4+nclass, ndet], transpose
+            numClasses = rows - 4;
             cv::Mat reshaped = output.reshape(1, rows);
             cv::transpose(reshaped, data);
         } else {
+            // Shape is [ndet, 4+nclass]
+            numClasses = cols - 4;
             data = output.reshape(1, rows);
         }
 
-        int numDetections = data.rows;
-        int dataCols = data.cols;
-        if (dataCols < 4 + NUM_CLASSES) return detections;
+        if (numClasses <= 0) return detections;
 
+        // Build class mapping on first inference (or if model changed)
+        if (numClasses != modelNumClasses) {
+            buildClassMapping(numClasses);
+        }
+
+        int numDetections = data.rows;
         float scaleX = static_cast<float>(origWidth) / config.inputWidth;
         float scaleY = static_cast<float>(origHeight) / config.inputHeight;
 
         struct RawDetection {
             BBox bbox;
             float confidence;
-            int classID;
+            int internalClassID;
         };
 
         // Per-class storage for NMS
-        std::array<std::vector<RawDetection>, NUM_CLASSES> perClassDetections;
+        std::array<std::vector<RawDetection>, INTERNAL_NUM_CLASSES> perClassDetections;
 
         for (int i = 0; i < numDetections; ++i) {
             const float* row = data.ptr<float>(i);
@@ -68,17 +115,22 @@ struct PlayerDetector::Impl {
             float w = row[2];
             float h = row[3];
 
-            // Find best class
-            int bestClass = 0;
+            // Find best class among all model classes
+            int bestModelClass = 0;
             float bestScore = row[4];
-            for (int c = 1; c < NUM_CLASSES; ++c) {
+            for (int c = 1; c < numClasses; ++c) {
                 if (row[4 + c] > bestScore) {
                     bestScore = row[4 + c];
-                    bestClass = c;
+                    bestModelClass = c;
                 }
             }
 
             if (bestScore < config.confidenceThreshold) continue;
+
+            // Map model class to internal class
+            int internalClass = (bestModelClass < static_cast<int>(resolvedMapping.size()))
+                                ? resolvedMapping[bestModelClass] : -1;
+            if (internalClass < 0) continue; // skip unmapped classes
 
             RawDetection det;
             det.bbox.x = (cx - w * 0.5f) * scaleX;
@@ -87,17 +139,16 @@ struct PlayerDetector::Impl {
             det.bbox.height = h * scaleY;
             det.bbox.confidence = bestScore;
             det.confidence = bestScore;
-            det.classID = bestClass;
+            det.internalClassID = internalClass;
 
-            perClassDetections[bestClass].push_back(det);
+            perClassDetections[internalClass].push_back(det);
         }
 
         // Per-class NMS
-        for (int c = 0; c < NUM_CLASSES; ++c) {
+        for (int c = 0; c < INTERNAL_NUM_CLASSES; ++c) {
             auto& dets = perClassDetections[c];
             if (dets.empty()) continue;
 
-            // Sort by confidence descending
             std::sort(dets.begin(), dets.end(),
                       [](const RawDetection& a, const RawDetection& b) {
                           return a.confidence > b.confidence;
@@ -110,8 +161,8 @@ struct PlayerDetector::Impl {
                 Detection det;
                 det.bbox = dets[i].bbox;
                 det.confidence = dets[i].confidence;
-                det.classID = dets[i].classID;
-                det.classLabel = CLASS_NAMES[c];
+                det.classID = dets[i].internalClassID;
+                det.classLabel = INTERNAL_CLASS_NAMES[c];
                 detections.push_back(det);
 
                 if (static_cast<int>(detections.size()) >= config.maxDetections)

@@ -4,6 +4,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <memory>
 

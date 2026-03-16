@@ -39,5 +39,5 @@ jobs:
         run: |
           mkdir -p /tmp/ci_demo_output
           ./build/bin/hm_demo --output /tmp/ci_demo_output
-          test -f /tmp/ci_demo_output/demo_clip.json
-          test -f /tmp/ci_demo_output/demo_clip.bvh
+          test -f /tmp/ci_demo_output/full_sequence.json
+          test -f /tmp/ci_demo_output/full_sequence.bvh
